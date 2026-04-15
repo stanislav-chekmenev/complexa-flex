@@ -19,6 +19,8 @@ results
 .env
 env.sh
 
+.uv-cache
+.venv
 venv/
 **.egg-info
 **.ipynb_checkpoints/
