@@ -144,11 +144,11 @@ source "$VENV_DIR/.venv/bin/activate"
 echo "      Python: $(which python)"
 
 # ------------------------------------------------------------------------------
-# 3. Install PyTorch with CUDA 12.6
+# 3. Install PyTorch with CUDA 13.0
 # ------------------------------------------------------------------------------
-echo "[3/7] Installing PyTorch 2.7.0 with CUDA 12.6..."
-uv pip install torch==2.7.0+cu126 torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu126
+echo "[3/7] Installing PyTorch 2.10.0 with CUDA 13.0..."
+uv pip install torch==2.10.0+cu130 torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu130
 
 # ------------------------------------------------------------------------------
 # 4. Install base dependencies from pyproject.toml
@@ -161,7 +161,7 @@ uv pip install --index-strategy unsafe-best-match -e "$PROJECT_DIR"
 # ------------------------------------------------------------------------------
 echo "[5/7] Installing PyTorch Geometric packages..."
 uv pip install torch_geometric torch_scatter torch_sparse torch_cluster \
-    -f https://data.pyg.org/whl/torch-2.7.0+cu126.html
+    -f https://data.pyg.org/whl/torch-2.10.0+cu130.html
 
 # ------------------------------------------------------------------------------
 # 6. Install Graphein and Atomworks
