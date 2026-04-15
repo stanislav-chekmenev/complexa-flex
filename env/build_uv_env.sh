@@ -147,7 +147,7 @@ echo "      Python: $(which python)"
 # 3. Install PyTorch with CUDA 13.0
 # ------------------------------------------------------------------------------
 echo "[3/7] Installing PyTorch 2.10.0 with CUDA 13.0..."
-uv pip install torch==2.10.0+cu130 torchvision torchaudio \
+uv pip torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
     --index-url https://download.pytorch.org/whl/cu130
 
 # ------------------------------------------------------------------------------
