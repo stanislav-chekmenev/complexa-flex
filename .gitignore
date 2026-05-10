@@ -1,3 +1,15 @@
+# Additions
+# Checkpoints
+/ckpts
+/community_models/ckpts
+
+# Data
+/data
+
+# Analysis
+analysis
+
+# Complexa native ignore file
 slurm_utils/.user_info*
 foldseek_db/
 slurm_run_*/

@@ -151,10 +151,10 @@ uv pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
     --index-url https://download.pytorch.org/whl/cu130
 
 # ------------------------------------------------------------------------------
-# 4. Install base dependencies from pyproject.toml
+# 4. Install base dependencies from pyproject.toml (with dev extras: ruff, ipdb, jupyter)
 # ------------------------------------------------------------------------------
-echo "[4/9] Installing base dependencies from pyproject.toml..."
-uv pip install --index-strategy unsafe-best-match -e "$PROJECT_DIR"
+echo "[4/9] Installing base dependencies from pyproject.toml (with dev extras)..."
+uv pip install --index-strategy unsafe-best-match -e "$PROJECT_DIR[dev]"
 
 # ------------------------------------------------------------------------------
 # 5. Install PyTorch Geometric packages
@@ -238,6 +238,15 @@ uv pip install torch_scatter torch_sparse torch_cluster \
 echo "      PyTorch version after re-pin: $(python -c 'import torch; print(torch.__version__)')"
 
 # ------------------------------------------------------------------------------
+# Register the venv as a Jupyter kernel (for notebook/JupyterLab use)
+# ------------------------------------------------------------------------------
+echo "Registering Jupyter kernel '$VENV_NAME'..."
+python -m ipykernel install --user --name "$VENV_NAME" \
+    --display-name "Python ($VENV_NAME)" 2>/dev/null \
+    && echo "      Kernel registered: Python ($VENV_NAME)" \
+    || echo "      Warning: failed to register Jupyter kernel"
+
+# ------------------------------------------------------------------------------
 # Done!
 # ------------------------------------------------------------------------------
 echo ""
@@ -250,6 +259,10 @@ echo "  source $VENV_DIR/.venv/bin/activate"
 echo ""
 echo "To verify installation:"
 echo "  python -c \"import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')\""
+echo ""
+echo "To launch JupyterLab (kernel 'Python ($VENV_NAME)' is pre-registered):"
+echo "  source $VENV_DIR/.venv/bin/activate"
+echo "  jupyter lab"
 echo ""
 echo "Note: Foldseek and MMseqs2 are not included in the public build."
 echo "Install them separately if needed:"
