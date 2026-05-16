@@ -53,7 +53,7 @@ wandb/
 **.log
 **.ckpt
 **.pt
-!tests/fixtures/*.pt
+!tests/fixtures/**/*.pt
 archive/
 multirun
 output
