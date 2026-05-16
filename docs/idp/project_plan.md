@@ -30,18 +30,31 @@ The goal is to use that information alongside the sequence and structure informa
 - Diffraction data might have useful signal for identifying IDR conformations -> it's an additional conditioning signal during training.
 - If we can model water molecules explicitly, this would give access to desolvation as well. 
 
-### Step 1 - PoC 
+### PoC 
 
-- Run a JEPA-style SSL on voxelised diffraction data in the reciprocal space build with Miller indices. That is the baseline.
-- Show we are able to do representation learning with this setup. This is already good, since we could potentially apply it to IDRs.
-- Generate a dataset of altlocs in parallel, using [Phenix](https://phenix-online.org/documentation/reference/ensemble_refinement.html). 10-50K monomers?
-- JEPA-based encoder done, altloc dataset done -> finetune Complexa to output several conformers (how?)
-    Check how well Complexa can fold (in the process) 
-    - Idea 1: freeze Complexa, add the JEPA-encoder as an additional input, fuse its embeddings to the pair features at different layers, add a few trainable Proteina blocks to the head of the model.
-    - Idea 2: Use LoRA with Complexa, but bias LoRA matrices with the JEPA embeddings. 
-    - Finetune on a simple folding task - sequence to conformers
+- Train a 3D CNN in the voxelised reciprocal space to predict CATH C-level domain label.
+- The aim is too see if we can learn a signal from the raw data
+
+### Directions and ideas for the next steps
+
+#### 1 - Representation learning
+
+- Run a JEPA-style SSL on voxelised sparse diffraction data in the reciprocal space. That could be a strong feature encoder for the downstream tasks.
+- Generate a dataset of altlocs, using [Phenix](https://phenix-online.org/documentation/reference/ensemble_refinement.html). 10-50K monomers?
+
+**Downstream tasks**
+
+
+
+
+    1. Training or finetuning a protein model on multiple conformers, using the reflections JEPA representations. (**assumption: Phenix gives us meaningful conformers**)
+        - Generate a dataset of altlocs, using [Phenix](https://phenix-online.org/documentation/reference/ensemble_refinement.html). 10-50K monomers?
+        - Finetune Boltz to output several conformers. 
+            - Idea 1 for Complexa: freeze Complexa, add the JEPA-encoder as an additional input, fuse its embeddings to the pair features at different layers, add a few trainable Proteina blocks to the head of the model.
+            - Idea 2: Use LoRA with Complexa, but bias LoRA matrices with the JEPA embeddings. 
+        - Finetune on a simple folding task - sequence + reflections to conformers
 
 - Use Gaussian splatting (NeRFs) instead of voxels. Conformer generation utilising weight symmetries of neural fields??? Can we do JEPA on weights??? Need more reading
 - Representation learning with the voxels/NeRFs/both can be a paper on its own if we manage to show some good performance on downstream tasks, especially with IDRs. 
 
-### Step 2
+### Step 2`
