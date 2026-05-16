@@ -105,6 +105,46 @@ def spearman_r(pred_cont: Tensor, target_cont: Tensor, mask: Tensor) -> Tensor:
     return torch.stack(rs).mean()
 
 
+def expected_calibration_error(
+    logits: Tensor,
+    labels_bin: Tensor,
+    mask: Tensor,
+    num_bins_ece: int = 10,
+) -> Tensor:
+    """Top-1-probability vs accuracy ECE with equal-width buckets in `[0, 1]`.
+
+    Definition: `ECE = sum_b (n_b / n_total) * |acc_b - conf_b|`, where the
+    sum is over `num_bins_ece` equal-width confidence buckets, `conf_b` is
+    the mean top-1 probability in bucket `b`, `acc_b` is the fraction of
+    correct top-1 predictions, and `n_b` is the count of valid (masked)
+    residues falling in bucket `b`. Empty buckets are skipped (weight 0).
+
+    Returns a scalar `Tensor` in `[0, 1]`.
+    """
+    probs = torch.softmax(logits.float(), dim=-1)
+    conf, pred = probs.max(dim=-1)
+    mask_f = mask.to(torch.float32)
+    correct = (pred == labels_bin).to(torch.float32) * mask_f
+    n_total = mask_f.sum().clamp_min(1.0)
+
+    edges = torch.linspace(0.0, 1.0, num_bins_ece + 1, device=logits.device)
+    ece = torch.zeros((), device=logits.device, dtype=torch.float32)
+    for i in range(num_bins_ece):
+        lo, hi = edges[i], edges[i + 1]
+        if i == num_bins_ece - 1:
+            in_bin = (conf >= lo) & (conf <= hi)
+        else:
+            in_bin = (conf >= lo) & (conf < hi)
+        in_bin_f = in_bin.to(torch.float32) * mask_f
+        n_b = in_bin_f.sum()
+        if n_b.item() == 0.0:
+            continue
+        acc_b = (correct * in_bin_f).sum() / n_b
+        conf_b = (conf * in_bin_f).sum() / n_b
+        ece = ece + (n_b / n_total) * (acc_b - conf_b).abs()
+    return ece
+
+
 def plddt_mae_stratified(
     logits: Tensor,
     labels: Tensor,
