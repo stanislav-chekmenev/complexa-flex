@@ -24,7 +24,15 @@ class LocalLatentsTransformer(torch.nn.Module):
     def __init__(self, **kwargs):
         """
         Initializes the NN. The seqs and pair representations used are just zero in case
-        no features are required."""
+        no features are required.
+
+        When ``expose_intermediates=True``, ``forward(input)`` additionally returns
+        ``nn_out['trunk_intermediates']`` carrying the post-trunk
+        ``(s, z, mask, orig_mask, n_orig)``. Default ``False``; bit-identical to
+        the legacy forward when off. The sidecar ``ConfidenceDistillationModule``
+        (PR-4) flips this on programmatically after instantiation — do not set
+        it in trunk Hydra configs.
+        """
         super().__init__()
         self.nlayers = kwargs["nlayers"]
         self.token_dim = kwargs["token_dim"]
@@ -35,6 +43,7 @@ class LocalLatentsTransformer(torch.nn.Module):
         self.use_tri_attn = kwargs.get("use_tri_attn", False)
         self.use_qkln = kwargs["use_qkln"]
         self.output_param = kwargs["output_parameterization"]
+        self.expose_intermediates = bool(kwargs.get("expose_intermediates", False))
 
         # To form initial representation
         self.init_repr_factory = FeatureFactory(
@@ -292,7 +301,19 @@ class LocalLatentsTransformer(torch.nn.Module):
 
             ca_nm_out = ca_nm_out[:, :n_orig, :] * orig_mask[:, :, None]
 
+        s_out = seqs * mask[..., None]
+        z_out = pair_rep
+        intermediates = {
+            "s": s_out,
+            "z": z_out,
+            "mask": mask,
+            "orig_mask": orig_mask,
+            "n_orig": int(n_orig),
+        }
+
         nn_out = {}
         nn_out["bb_ca"] = {self.output_param["bb_ca"]: ca_nm_out}
         nn_out["local_latents"] = {self.output_param["local_latents"]: local_latents_out}
+        if self.expose_intermediates:
+            nn_out["trunk_intermediates"] = intermediates
         return nn_out
