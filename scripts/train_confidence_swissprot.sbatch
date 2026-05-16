@@ -25,9 +25,7 @@ PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
 NUM_DEVICES=2
 DEVICE_TYPE=h100nvl
 
-if [ "$DEVICE_TYPE" == "rtx6000" ]; then
-    DATA_ROOT="/scratch/$USER/complexa-confdistill"
-elif [ "$DEVICE_TYPE" == "h100nvl" ]; then
+if [ "$DEVICE_TYPE" == "rtx6000" ] || [ "$DEVICE_TYPE" == "h100nvl" ]; then
     DATA_ROOT="/netscratch/$USER/complexa-confdistill"
 else
     echo "ERROR: unknown DEVICE_TYPE=$DEVICE_TYPE" >&2
