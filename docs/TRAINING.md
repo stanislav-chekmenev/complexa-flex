@@ -374,4 +374,4 @@ Trains a `SequenceOnlyPLDDTHead` (`n_blocks=1`, no `PairReprUpdate` layer) on th
 
 The shared `ConfidenceTrunk` always carries `(s, z, mask, cond, chain_id)`; `z` is symmetrised and LayerNormed before `_predict` sees it, so pair-output heads (ipAE / PDE) plug in without re-doing the work. `chain_id` is plumbed in `BaseConfidenceHead.forward` and defaults to None for monomer training; future multimer heads consume it for chain-id embeddings.
 
-See [superpowers/reviews/2026-05-16-final-review.md](superpowers/reviews/2026-05-16-final-review.md) for the design history and deferred follow-up items.
+For the design history, full PR-by-PR breakdown, reviewer findings, and deferred follow-up items, see the archived final review and plans (local-only, gitignored) at `docs/archive/2026-05-16-confidence-head-distillation/`. The closed PRs live at https://github.com/stanislav-chekmenev/complexa-flex/pull/{1,2,3,4,5,6,7}.
