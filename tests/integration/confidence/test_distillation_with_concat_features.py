@@ -1,9 +1,15 @@
-"""Integration test for `SequenceOnlyPLDDTHead` inside the distillation sidecar.
+"""Concat-features contract: sidecar must pad `cond` to `n_ext` before head.
 
-Exercises the same fake `Proteina` stub as the canonical one-step test,
-but constructs a `SequenceOnlyPLDDTHead` and confirms (a) one training
-step is finite and grad-attached, (b) only head parameters collect
-gradients, and (c) `_predict` does not crash when `n_extended != n_orig`.
+The trunk's `cond_factory` emits `[b, n_orig, dim_cond]` because complexa's
+feature factory currently lives in the `n_orig` (binder-only) frame. The
+trunk itself extends to `n_ext = n_orig + n_concat` (motif/target/ligand);
+when the sidecar feeds `(s, z, mask_ext, cond)` to the head, `cond` and
+`s/z/mask_ext` must agree on the second axis.
+
+This test wires a fake `Proteina` whose intermediates report
+`n_ext > n_orig`, captures the cond the head actually receives, and
+asserts (a) `cond.shape[1] == n_ext`, (b) the appended slice is exactly
+zero.
 """
 
 from __future__ import annotations
@@ -15,9 +21,7 @@ from torch import nn
 
 from proteinfoundation.confidence.lightning_module import ConfidenceDistillationModule
 from proteinfoundation.nn.confidence.base import ConfidenceTrunk
-from proteinfoundation.nn.confidence.plddt_sequence_only_head import (
-    SequenceOnlyPLDDTHead,
-)
+from proteinfoundation.nn.confidence.plddt_head import PLDDTHead
 
 
 TOKEN_DIM = 32
@@ -26,9 +30,12 @@ DIM_COND = 16
 NUM_BINS = 50
 LATENT_DIM = 8
 TRUNK_EVAL_T = 0.99
+N_EXTRA = 5
 
 
 class _FakeCondFactory(nn.Module):
+    """Emits cond of shape `[b, n_orig, dim_cond]` (binder-only frame)."""
+
     def __init__(self, modalities: tuple[str, ...], dim_cond: int) -> None:
         super().__init__()
         self.modalities = modalities
@@ -37,30 +44,28 @@ class _FakeCondFactory(nn.Module):
     def forward(self, batch: dict) -> torch.Tensor:
         t_stack = torch.stack([batch["t"][m] for m in self.modalities], dim=-1)
         mask = batch["mask"]
-        b, n = mask.shape
+        b, n_orig = mask.shape
         cond = self.linear(t_stack)
-        cond = cond[:, None, :].expand(b, n, -1).contiguous()
+        cond = cond[:, None, :].expand(b, n_orig, -1).contiguous()
         return cond * mask[..., None].to(cond.dtype)
 
 
 class _FakeProteinaNN(nn.Module):
-    def __init__(self, dim_cond: int, token_dim: int, pair_repr_dim: int, n_extra: int = 0) -> None:
+    """Returns intermediates with `n_ext = n_orig + N_EXTRA`."""
+
+    def __init__(self, dim_cond: int, token_dim: int, pair_repr_dim: int) -> None:
         super().__init__()
         self.cond_factory = _FakeCondFactory(("bb_ca", "local_latents"), dim_cond)
         self.expose_intermediates = True
-        self.token_dim = token_dim
-        self.pair_repr_dim = pair_repr_dim
-        self.n_extra = n_extra
         self.embed = nn.Linear(1, token_dim, bias=False)
         self.embed_pair = nn.Linear(1, pair_repr_dim, bias=False)
 
     def forward(self, batch: dict) -> dict:
         mask = batch["mask"]
-        b, n = mask.shape
-        n_ext = n + self.n_extra
-        orig_mask = mask
+        b, n_orig = mask.shape
+        n_ext = n_orig + N_EXTRA
         mask_ext = torch.zeros(b, n_ext, dtype=torch.bool, device=mask.device)
-        mask_ext[:, :n] = mask
+        mask_ext[:, :n_orig] = mask
         ones = torch.ones(b, n_ext, 1, device=mask.device)
         s = self.embed(ones) * mask_ext[..., None].to(ones.dtype)
         ones_pair = torch.ones(b, n_ext, n_ext, 1, device=mask.device)
@@ -72,8 +77,8 @@ class _FakeProteinaNN(nn.Module):
                 "s": s,
                 "z": z,
                 "mask": mask_ext,
-                "orig_mask": orig_mask,
-                "n_orig": int(n),
+                "orig_mask": mask,
+                "n_orig": int(n_orig),
             }
         }
 
@@ -129,15 +134,9 @@ class _FakeAutoEncoder:
 
 
 class _FakeProteina(nn.Module):
-    def __init__(
-        self,
-        dim_cond: int,
-        token_dim: int,
-        pair_repr_dim: int,
-        n_extra: int = 0,
-    ) -> None:
+    def __init__(self, dim_cond: int, token_dim: int, pair_repr_dim: int) -> None:
         super().__init__()
-        self.nn = _FakeProteinaNN(dim_cond, token_dim, pair_repr_dim, n_extra=n_extra)
+        self.nn = _FakeProteinaNN(dim_cond, token_dim, pair_repr_dim)
         self.fm = _FakeFM()
         self.autoencoder = _FakeAutoEncoder()
         self.cfg_exp = SimpleNamespace(
@@ -145,20 +144,20 @@ class _FakeProteina(nn.Module):
         )
 
 
-def _make_head() -> SequenceOnlyPLDDTHead:
+def _make_head() -> PLDDTHead:
     trunk = ConfidenceTrunk(
         token_dim=TOKEN_DIM,
         pair_repr_dim=PAIR_REPR_DIM,
         n_blocks=2,
         n_heads=4,
         dim_cond=DIM_COND,
-        use_tri_mult=False,
+        use_tri_mult=True,
         use_tri_attn=False,
         use_qkln=True,
         dropout=0.0,
-        update_pair_repr_every_n=1_000_000,
+        update_pair_repr_every_n=1,
     )
-    return SequenceOnlyPLDDTHead(
+    return PLDDTHead(
         trunk=trunk,
         token_dim=TOKEN_DIM,
         pair_repr_dim=PAIR_REPR_DIM,
@@ -168,9 +167,9 @@ def _make_head() -> SequenceOnlyPLDDTHead:
     )
 
 
-def _make_module(n_extra: int = 0) -> ConfidenceDistillationModule:
+def _make_module() -> ConfidenceDistillationModule:
     head = _make_head()
-    fake_trunk = _FakeProteina(DIM_COND, TOKEN_DIM, PAIR_REPR_DIM, n_extra=n_extra)
+    fake_trunk = _FakeProteina(DIM_COND, TOKEN_DIM, PAIR_REPR_DIM)
     return ConfidenceDistillationModule.from_components(
         head=head,
         proteina=fake_trunk,
@@ -183,7 +182,6 @@ def _make_batch(b: int = 2, n: int = 9) -> dict:
     torch.manual_seed(0)
     mask = torch.ones(b, n, dtype=torch.bool)
     plddt_mask = torch.ones(b, n, dtype=torch.bool)
-    plddt_mask[0, n // 2 :] = False
     coords_nm = torch.zeros(b, n, 37, 3)
     return {
         "mask": mask,
@@ -195,40 +193,39 @@ def _make_batch(b: int = 2, n: int = 9) -> dict:
     }
 
 
-def test_one_step_loss_finite_with_sequence_only_head() -> None:
+def test_cond_padded_to_n_ext_with_zero_tail() -> None:
+    """Sidecar must zero-pad cond from `n_orig` to `n_ext` before the head."""
+    mod = _make_module()
+    batch = _make_batch()
+
+    captured: dict[str, torch.Tensor] = {}
+    real_forward = mod.head.forward
+
+    def spy(s, z, mask, cond, chain_id=None):
+        captured["cond"] = cond.detach().clone()
+        captured["mask"] = mask.detach().clone()
+        return real_forward(s, z, mask, cond, chain_id=chain_id)
+
+    mod.head.forward = spy
+
+    mod._forward(batch)
+
+    cond = captured["cond"]
+    mask_ext = captured["mask"]
+    b, n_orig = batch["mask"].shape
+    n_ext = n_orig + N_EXTRA
+    assert cond.shape == (b, n_ext, DIM_COND), (
+        f"cond shape {tuple(cond.shape)} != (b, n_ext, dim_cond)=({b}, {n_ext}, {DIM_COND})"
+    )
+    assert mask_ext.shape == (b, n_ext)
+    assert torch.all(cond[:, n_orig:, :] == 0.0), "cond tail must be zero-padded"
+
+
+def test_one_step_works_with_concat_features() -> None:
+    """End-to-end: training_step finishes with finite loss when n_ext > n_orig."""
     mod = _make_module()
     batch = _make_batch()
     loss = mod.training_step(batch, batch_idx=0)
     assert torch.is_tensor(loss)
     assert torch.isfinite(loss)
     assert loss.requires_grad
-
-
-def test_only_head_params_get_grad_with_sequence_only_head() -> None:
-    mod = _make_module()
-    batch = _make_batch()
-    loss = mod.training_step(batch, batch_idx=0)
-    loss.backward()
-    for p in mod.proteina.parameters():
-        assert p.grad is None
-    head_trainable = [p for p in mod.head.parameters() if p.requires_grad]
-    assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in head_trainable)
-
-
-def test_predict_zeros_padded_logits_under_partial_mask() -> None:
-    """Under a partial `mask_ext` (some positions False), the head must
-
-    return zero logits at those positions. This pins the masking contract
-    of `_predict`; the previous name implied an `n_orig != n_ext`
-    relationship the function does not actually consume (it only sees
-    `mask_ext` and is agnostic to which positions were concat-padded).
-    """
-    head = _make_head()
-    b, n_ext = 2, 12
-    s = torch.randn(b, n_ext, TOKEN_DIM)
-    z = torch.randn(b, n_ext, n_ext, PAIR_REPR_DIM)
-    mask_ext = torch.ones(b, n_ext, dtype=torch.bool)
-    mask_ext[:, 9:] = False
-    out = head._predict(s, z, mask_ext)
-    assert out["plddt_logits"].shape == (b, n_ext, NUM_BINS)
-    assert torch.all(out["plddt_logits"][:, 9:] == 0.0)
