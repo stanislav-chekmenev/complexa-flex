@@ -240,3 +240,56 @@ def test_trunk_frozen_grad_state() -> None:
     for p in mod.proteina.parameters():
         assert p.requires_grad is False
     assert mod.proteina.training is False
+
+
+def test_forward_calls_fm_corrupt_batch_once() -> None:
+    mod = _make_module()
+    batch = _make_batch()
+    mod._forward(batch)
+    assert mod.proteina.fm.corrupt_calls == 1
+
+
+def test_t_is_stamped_to_trunk_eval_t() -> None:
+    mod = _make_module()
+    batch = _make_batch()
+    mod._forward(batch)
+    recorded = mod.proteina.nn.last_batch
+    assert recorded is not None
+    for m in ("bb_ca", "local_latents"):
+        rec_t = recorded["t"][m]
+        assert torch.allclose(
+            rec_t,
+            torch.full_like(rec_t, TRUNK_EVAL_T),
+        ), f"trunk observed t[{m}]={rec_t.tolist()}, expected pinned {TRUNK_EVAL_T}"
+
+
+def test_add_clean_samples_populates_x_1() -> None:
+    mod = _make_module()
+    batch = _make_batch()
+    mod._forward(batch)
+    recorded = mod.proteina.nn.last_batch
+    assert recorded is not None
+    assert "local_latents" in recorded["x_1"]
+    assert torch.allclose(
+        recorded["x_1"]["local_latents"],
+        torch.zeros_like(recorded["x_1"]["local_latents"]),
+    ), "autoencoder.encode returned zeros; x_1['local_latents'] must match"
+    assert "bb_ca" in recorded["x_1"]
+    assert recorded["x_1"]["bb_ca"].shape[-1] == 3
+
+
+def test_x_t_interpolation_matches_pinned_t() -> None:
+    mod = _make_module()
+    batch = _make_batch()
+    mod._forward(batch)
+    recorded = mod.proteina.nn.last_batch
+    assert recorded is not None
+    for m in ("bb_ca", "local_latents"):
+        x_0 = recorded["x_0"][m]
+        x_1 = recorded["x_1"][m]
+        x_t = recorded["x_t"][m]
+        t_pinned = recorded["t"][m][:, None, None]
+        expected = t_pinned * x_1 + (1.0 - t_pinned) * x_0
+        assert torch.allclose(x_t, expected, atol=1e-6), (
+            f"x_t[{m}] does not match interpolate(x_0, x_1, t_pinned={TRUNK_EVAL_T})"
+        )
