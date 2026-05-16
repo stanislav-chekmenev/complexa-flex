@@ -42,6 +42,7 @@ from proteinfoundation.confidence.losses import combined_plddt_loss, masked_pldd
 from proteinfoundation.confidence.metrics import (
     _labels_to_continuous,
     _logits_to_continuous,
+    expected_calibration_error,
     pearson_r,
     plddt_accuracy,
     plddt_mae,
@@ -275,9 +276,18 @@ class ConfidenceDistillationModule(L.LightningModule):
         labels_cont = out["labels_cont"]
         centers = self.head.bin_centers
 
-        loss_ce = masked_plddt_cross_entropy(
-            logits, labels_bin, mask_eff, label_smoothing=0.0
+        total, parts = combined_plddt_loss(
+            student_logits=logits,
+            plddt_bin_labels=labels_bin,
+            plddt_continuous=labels_cont,
+            mask=mask_eff,
+            bin_centers=centers,
+            ce_weight=self.ce_weight,
+            smooth_l1_weight=self.smooth_l1_weight,
+            label_smoothing=0.0,
         )
+        loss_ce = parts["loss_ce"]
+        loss_smooth_l1 = parts["loss_smooth_l1"]
 
         acc = plddt_accuracy(logits, labels_bin, mask_eff)
         mae = plddt_mae(logits, labels_bin, mask_eff, centers)
@@ -286,9 +296,14 @@ class ConfidenceDistillationModule(L.LightningModule):
         pr = pearson_r(pred_cont, target_cont, mask_eff)
         sr = spearman_r(pred_cont, target_cont, mask_eff)
         strat = plddt_mae_stratified(logits, labels_bin, mask_eff, centers)
+        ece = expected_calibration_error(logits, labels_bin, mask_eff)
 
         b = logits.shape[0]
         self.log("val/loss", loss_ce, prog_bar=True, batch_size=b, sync_dist=True)
+        self.log("val/loss_ce", loss_ce, batch_size=b, sync_dist=True)
+        self.log("val/loss_smooth_l1", loss_smooth_l1, batch_size=b, sync_dist=True)
+        self.log("val/loss_total", total, batch_size=b, sync_dist=True)
+        self.log("val/ece", ece, batch_size=b, sync_dist=True)
         self.log("val/plddt_accuracy", acc, prog_bar=True, batch_size=b, sync_dist=True)
         self.log("val/plddt_mae", mae, batch_size=b, sync_dist=True)
         self.log("val/pearson_r", pr, batch_size=b, sync_dist=True)
