@@ -127,6 +127,37 @@ def _ensure_atomworks_annotations(atom_array):
     return atom_array
 
 
+def _encode_atom_b_factor(atom_array, encoding, encoded: dict, n_tokens: int) -> torch.Tensor:
+    """Map per-atom B-factor onto the atom37 layout.
+
+    AF2-DB stores per-residue pLDDT in every atom's B-factor of that
+    residue, so the per-atom layout faithfully preserves the upstream
+    signal for masked-mean aggregation in `AddPLDDTFromBFactor`.
+    Slots without a corresponding atom remain `0.0`.
+    """
+    from atomworks.ml.transforms.encoding import token_iter
+
+    out = np.zeros((n_tokens, encoding.n_atoms_per_token), dtype=np.float32)
+    if not hasattr(atom_array, "b_factor") or atom_array.b_factor is None:
+        return torch.from_numpy(out)
+
+    has_atomize = "atomize" in atom_array.get_annotation_categories()
+    seq = encoded["seq"]
+    idx_to_token = {v: k for k, v in encoding.token_to_idx.items()}
+
+    for i, token in enumerate(token_iter(atom_array)):
+        token_idx = seq[i]
+        token_name = idx_to_token[token_idx]
+        token_is_atom = (has_atomize and token.atomize[0]) or len(token) == 1
+        for atom in token:
+            atom_name = str(token_name) if token_is_atom else atom.atom_name
+            slot = encoding.atom_to_idx.get((token_name, atom_name))
+            if slot is None:
+                continue
+            out[i, slot] = float(atom.b_factor)
+    return torch.from_numpy(out)
+
+
 def atomarray_to_atom37(
     atom_array,
     sample_id: str = "unknown",
@@ -158,6 +189,7 @@ def atomarray_to_atom37(
         return Data(
             coords=torch.zeros(0, 37, 3, dtype=torch.float32),
             coord_mask=torch.zeros(0, 37, dtype=torch.bool),
+            atom_b_factor=torch.zeros(0, 37, dtype=torch.float32),
             residues=[],
             chains=torch.zeros(0, dtype=torch.long),
             residue_type=torch.zeros(0, dtype=torch.long),
@@ -170,6 +202,7 @@ def atomarray_to_atom37(
     coords = torch.from_numpy(encoded["xyz"]).float()
     coords = torch.nan_to_num(coords, nan=0.0)
     coord_mask = torch.from_numpy(encoded["mask"]).bool()
+    atom_b_factor = _encode_atom_b_factor(atom_array, encoding, encoded, n_tokens)
 
     idx_to_token = {v: k for k, v in encoding.token_to_idx.items()}
     residues = [idx_to_token[idx] for idx in encoded["seq"]]
@@ -189,6 +222,7 @@ def atomarray_to_atom37(
     data = Data(
         coords=coords,
         coord_mask=coord_mask,
+        atom_b_factor=atom_b_factor,
         residue_type=residue_type,
         residues=residues,
         chains=chains,
