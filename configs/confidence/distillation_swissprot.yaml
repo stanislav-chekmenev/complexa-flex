@@ -1,0 +1,39 @@
+# @package _global_
+defaults:
+  - /nn/confidence/plddt_head@confidence.head
+  - /dataset/unified/afdb_monomers_with_plddt@data
+  - /training/confidence_distill@training
+  - _self_
+
+trainer:
+  _target_: lightning.pytorch.Trainer
+  accelerator: gpu
+  devices: 1
+  strategy: ddp_find_unused_parameters_false
+  precision: ${training.precision}
+  max_epochs: ${training.max_epochs}
+  gradient_clip_val: ${training.gradient_clip_val}
+  log_every_n_steps: 25
+  check_val_every_n_epoch: 1
+  callbacks:
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      monitor: "val/loss_ce"
+      mode: "min"
+      save_top_k: 3
+      filename: "ce-{epoch:03d}-{val/loss_ce:.4f}"
+      auto_insert_metric_name: false
+    - _target_: lightning.pytorch.callbacks.EarlyStopping
+      monitor: "val/loss_ce"
+      mode: "min"
+      patience: 10
+
+data:
+  datamodule:
+    # Override to `null` on environments where the parquet does not carry
+    # an MMseqs cluster column; the module logs a warning and falls back
+    # to the legacy row-order split.
+    cluster_column: unicluster
+    cluster_seed: 42
+
+seed: 42
+run_name: "plddt-distill-swissprot"

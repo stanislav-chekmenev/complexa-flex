@@ -324,3 +324,54 @@ optimizer:
 trainer:
   gradient_clip_val: 0.5
 ```
+
+---
+
+## Confidence-head distillation
+
+Sidecar trainer for the AF2 pLDDT student head. Frozen complexa trunk + frozen autoencoder + trainable `PLDDTHead`. Independent entry point; does not invoke `proteinfoundation.train`.
+
+### Quick start (single GPU)
+
+```bash
+CKPT_DIR=ckpts DATA_PATH=/path/to/data uv run python -m proteinfoundation.confidence.train_confidence \
+    --config-name=confidence/distillation_swissprot \
+    trainer.devices=1
+```
+
+The config reads `${oc.env:CKPT_DIR,ckpts}/complexa.ckpt` and `${oc.env:CKPT_DIR,ckpts}/complexa_ae.ckpt` for the frozen trunk + AE, and `${oc.env:DATA_PATH}/afdb_cifs/metadata.parquet` for the dataset.
+
+### Multi-GPU SLURM
+
+```bash
+sbatch scripts/train_confidence_swissprot.sbatch
+```
+
+2× h100nvl, 3-day wall, bf16-mixed, DDP `find_unused_parameters_false`. Stages trunk + AE ckpt + AFDB parquet to `/netscratch/$USER/complexa-confdistill`. Rsyncs the run dir back to `$PROJECT_ROOT/ckpts/runs/${SLURM_JOB_ID}` on completion.
+
+### Loss + metrics
+
+- `train/loss = 0.7 * masked_CE + 0.1 * SmoothL1(EV)`. Masked reduction `sum(loss * mask) / mask.sum().clamp_min(1)`.
+- Validation logs: `val/loss_ce`, `val/loss_smooth_l1`, `val/loss_total`, `val/plddt_accuracy`, `val/plddt_mae`, `val/pearson_r`, `val/spearman_r`, `val/mae_lt50`, `val/mae_50_70`, `val/mae_70_90`, `val/mae_ge90`, `val/ece`, `val/ece_adaptive`.
+- Reliability diagram emitted on `on_validation_epoch_end` via `logger.log_table` if configured, else `.npy` fallback under `trainer.log_dir/reliability_epoch_<E>.npy` (rank-0 only).
+- Early-stop on `val/loss_ce` (mode `min`, patience 10). `ModelCheckpoint` saves top-3 by `val/loss_ce`.
+
+### Sequence-only diagnostic control
+
+```bash
+CKPT_DIR=ckpts uv run python -m proteinfoundation.confidence.train_confidence \
+    --config-name=confidence/distillation_swissprot_control
+```
+
+Trains a `SequenceOnlyPLDDTHead` (`n_blocks=1`, no `PairReprUpdate` layer) on the same data. If the structure-aware head's val Spearman gap < 0.05 vs this control, the head is learning a sequence shortcut.
+
+### Adding a new confidence head (ipTM / ipAE / ipLDDT)
+
+1. Subclass `proteinfoundation.nn.confidence.BaseConfidenceHead` and override `_predict(s, z, mask)`.
+2. Decorate with `@register_confidence_head("your_head_name")` so the registry populates on import.
+3. Add a Hydra config under `configs/nn/confidence/your_head.yaml` composing `base.yaml`.
+4. Compose a training config under `configs/confidence/your_head_distillation.yaml`.
+
+The shared `ConfidenceTrunk` always carries `(s, z, mask, cond, chain_id)`; `z` is symmetrised and LayerNormed before `_predict` sees it, so pair-output heads (ipAE / PDE) plug in without re-doing the work. `chain_id` is plumbed in `BaseConfidenceHead.forward` and defaults to None for monomer training; future multimer heads consume it for chain-id embeddings.
+
+See [superpowers/reviews/2026-05-16-final-review.md](superpowers/reviews/2026-05-16-final-review.md) for the design history and deferred follow-up items.

@@ -1,3 +1,19 @@
+# Additions
+# Checkpoints
+/ckpts
+/community_models/ckpts
+
+# Data
+/data
+
+# Local-only archive of finished superpowers specs/plans/reviews; the
+# canonical copies live under docs/superpowers/ and are committed there.
+docs/archive/
+
+# Analysis
+analysis
+
+# Complexa native ignore file
 slurm_utils/.user_info*
 foldseek_db/
 slurm_run_*/
@@ -41,6 +57,7 @@ wandb/
 **.log
 **.ckpt
 **.pt
+!tests/fixtures/**/*.pt
 archive/
 multirun
 output
@@ -94,7 +111,8 @@ tests/test_eval_generated/
 .rsync_lock/
 
 .pytest_tmp/
-.claude/
+.claude/*
+!.claude/agents/
 .dotnet/
 .gitconfig
 .gnupg/

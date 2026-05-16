@@ -3461,3 +3461,85 @@ class LigandAtom37SqueezeTransform(BaseTransform):
         # for k in data.keys(): v=getattr(data,k); print(f"{k}: {v.shape}" if hasattr(v,'shape') else f"{k}: {type(v).__name__}")
         data.x_target = data.x_target[:, 1, :]
         return data
+
+
+class AddPLDDTFromBFactor(BaseTransform):
+    """Extracts per-residue AF2 pLDDT from atom-level B-factor.
+
+    AF2-DB stores per-residue pLDDT on the `[0, 100]` scale in every atom's
+    B-factor of that residue. This transform reduces the per-atom B-factor
+    over valid atoms and writes three new fields on the Data object:
+
+    - `plddt_residue`: `[n] float32` in `[0, scale_max]`.
+    - `plddt_bin`: `[n] int64`, the index after `plddt_to_bin`.
+    - `plddt_mask`: `[n] bool`, `True` where at least one atom is resolved
+      and the summed B-factor is non-zero.
+
+    The transform is additive: existing fields are left untouched. If the
+    observed B-factor stays below 1.5 we emit a once-per-rank warning (the
+    AF2-DB convention is `[0, 100]`; values that small suggest a normalised
+    pipeline upstream) and continue — never raise.
+
+    Args:
+        max_bins: Number of pLDDT bins.
+        bin_width: Width of each pLDDT bin.
+        scale_max: Upper clip applied to per-residue pLDDT before binning.
+        sanity_check: When `True`, emit the once-per-rank low-B-factor warning.
+        warn_once: When `True`, the sanity warning fires at most once across
+            the lifetime of this class on the local rank.
+    """
+
+    _warned: bool = False
+
+    def __init__(
+        self,
+        max_bins: int = 50,
+        bin_width: float = 2.0,
+        scale_max: float = 100.0,
+        sanity_check: bool = True,
+        warn_once: bool = True,
+    ):
+        self.max_bins = max_bins
+        self.bin_width = bin_width
+        self.scale_max = scale_max
+        self.sanity_check = sanity_check
+        self.warn_once = warn_once
+
+    def __call__(self, graph: Data) -> Data:
+        from proteinfoundation.confidence.losses import plddt_to_bin
+
+        atom_b_factor = graph.atom_b_factor
+        coord_mask = graph.coord_mask
+
+        if self.sanity_check:
+            self._maybe_warn_normalised(atom_b_factor)
+
+        valid_atoms = coord_mask.to(atom_b_factor.dtype)
+        atom_sum = (atom_b_factor * valid_atoms).sum(dim=-1)
+        atom_count = valid_atoms.sum(dim=-1).clamp_min(1.0)
+        plddt_residue = (atom_sum / atom_count).clamp(0.0, self.scale_max).to(torch.float32)
+
+        graph.plddt_residue = plddt_residue
+        graph.plddt_bin = plddt_to_bin(plddt_residue, bin_width=self.bin_width, num_bins=self.max_bins)
+        graph.plddt_mask = coord_mask.any(dim=-1) & (atom_b_factor.sum(dim=-1) > 0)
+        return graph
+
+    def _maybe_warn_normalised(self, atom_b_factor: torch.Tensor) -> None:
+        if self.warn_once and AddPLDDTFromBFactor._warned:
+            return
+        if atom_b_factor.numel() == 0:
+            return
+        if atom_b_factor.max().item() > 1.5:
+            return
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+        else:
+            rank = 0
+        logger.warning(
+            "AddPLDDTFromBFactor: atom B-factor max <= 1.5 on rank "
+            f"{rank}; AF2-DB stores pLDDT in [0, 100]. Values this small "
+            "suggest the input is normalised pLDDT, not raw B-factor. "
+            "Continuing without raising."
+        )
+        if self.warn_once:
+            AddPLDDTFromBFactor._warned = True

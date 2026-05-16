@@ -127,6 +127,37 @@ def _ensure_atomworks_annotations(atom_array):
     return atom_array
 
 
+def _encode_atom_b_factor(atom_array, encoding, encoded: dict, n_tokens: int) -> torch.Tensor:
+    """Map per-atom B-factor onto the atom37 layout.
+
+    AF2-DB stores per-residue pLDDT in every atom's B-factor of that
+    residue, so the per-atom layout faithfully preserves the upstream
+    signal for masked-mean aggregation in `AddPLDDTFromBFactor`.
+    Slots without a corresponding atom remain `0.0`.
+    """
+    from atomworks.ml.transforms.encoding import token_iter
+
+    out = np.zeros((n_tokens, encoding.n_atoms_per_token), dtype=np.float32)
+    if not hasattr(atom_array, "b_factor") or atom_array.b_factor is None:
+        return torch.from_numpy(out)
+
+    has_atomize = "atomize" in atom_array.get_annotation_categories()
+    seq = encoded["seq"]
+    idx_to_token = {v: k for k, v in encoding.token_to_idx.items()}
+
+    for i, token in enumerate(token_iter(atom_array)):
+        token_idx = seq[i]
+        token_name = idx_to_token[token_idx]
+        token_is_atom = (has_atomize and token.atomize[0]) or len(token) == 1
+        for atom in token:
+            atom_name = str(token_name) if token_is_atom else atom.atom_name
+            slot = encoding.atom_to_idx.get((token_name, atom_name))
+            if slot is None:
+                continue
+            out[i, slot] = float(atom.b_factor)
+    return torch.from_numpy(out)
+
+
 def atomarray_to_atom37(
     atom_array,
     sample_id: str = "unknown",
@@ -158,6 +189,7 @@ def atomarray_to_atom37(
         return Data(
             coords=torch.zeros(0, 37, 3, dtype=torch.float32),
             coord_mask=torch.zeros(0, 37, dtype=torch.bool),
+            atom_b_factor=torch.zeros(0, 37, dtype=torch.float32),
             residues=[],
             chains=torch.zeros(0, dtype=torch.long),
             residue_type=torch.zeros(0, dtype=torch.long),
@@ -170,6 +202,7 @@ def atomarray_to_atom37(
     coords = torch.from_numpy(encoded["xyz"]).float()
     coords = torch.nan_to_num(coords, nan=0.0)
     coord_mask = torch.from_numpy(encoded["mask"]).bool()
+    atom_b_factor = _encode_atom_b_factor(atom_array, encoding, encoded, n_tokens)
 
     idx_to_token = {v: k for k, v in encoding.token_to_idx.items()}
     residues = [idx_to_token[idx] for idx in encoded["seq"]]
@@ -189,6 +222,7 @@ def atomarray_to_atom37(
     data = Data(
         coords=coords,
         coord_mask=coord_mask,
+        atom_b_factor=atom_b_factor,
         residue_type=residue_type,
         residues=residues,
         chains=chains,
@@ -780,6 +814,8 @@ class StructureDataModule(L.LightningDataModule):
         val_filters: list[str] | None = None,
         pad_max_total_tokens: int | None = None,
         pad_group_priority: list[str] | None = None,
+        cluster_column: str | None = None,
+        cluster_seed: int = 42,
         **pipeline_kwargs,
     ):
         super().__init__()
@@ -802,10 +838,72 @@ class StructureDataModule(L.LightningDataModule):
         self.val_filters = val_filters
         self.pad_max_total_tokens = pad_max_total_tokens
         self.pad_group_priority = pad_group_priority
+        self.cluster_column = cluster_column
+        self.cluster_seed = int(cluster_seed)
         self.pipeline_kwargs = pipeline_kwargs
 
         self.train_dataset = None
         self.val_dataset = None
+
+    def _cluster_aware_split(
+        self,
+        full_metadata: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        rng = np.random.default_rng(self.cluster_seed)
+        cluster_ids = full_metadata[self.cluster_column].to_numpy()
+        unique_clusters = np.unique(cluster_ids)
+        shuffled = unique_clusters.copy()
+        rng.shuffle(shuffled)
+
+        target_train = int(len(full_metadata) * self.train_split)
+        cluster_to_rows: dict[object, np.ndarray] = {
+            c: np.where(cluster_ids == c)[0] for c in shuffled
+        }
+        train_rows: list[int] = []
+        train_clusters: set[object] = set()
+        for c in shuffled:
+            if len(train_rows) >= target_train:
+                break
+            idxs = cluster_to_rows[c]
+            train_rows.extend(int(i) for i in idxs)
+            train_clusters.add(c)
+
+        val_rows = [
+            int(i)
+            for c in shuffled
+            if c not in train_clusters
+            for i in cluster_to_rows[c]
+        ]
+        if len(val_rows) == 0:
+            logger.warning(
+                "_cluster_aware_split: empty val split with "
+                f"cluster_column={self.cluster_column!r}, "
+                f"train_split={self.train_split}, "
+                f"n_clusters={len(unique_clusters)}, "
+                f"n_rows={len(full_metadata)}; "
+                "consider lowering train_split or using more clusters."
+            )
+        train_meta = full_metadata.iloc[train_rows].reset_index(drop=True)
+        val_meta = full_metadata.iloc[val_rows].reset_index(drop=True)
+        return train_meta, val_meta
+
+    def _split(
+        self,
+        full_metadata: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        if self.cluster_column is not None:
+            if self.cluster_column not in full_metadata.columns:
+                logger.warning(
+                    f"cluster_column={self.cluster_column!r} requested but absent "
+                    f"from metadata columns {list(full_metadata.columns)}; falling "
+                    "back to row-order split."
+                )
+            else:
+                return self._cluster_aware_split(full_metadata)
+        n_train = int(len(full_metadata) * self.train_split)
+        train_metadata = full_metadata.iloc[:n_train].reset_index(drop=True)
+        val_metadata = full_metadata.iloc[n_train:].reset_index(drop=True)
+        return train_metadata, val_metadata
 
     def setup(self, stage: str | None = None):
         # Load metadata
@@ -830,9 +928,7 @@ class StructureDataModule(L.LightningDataModule):
                     val_metadata = val_metadata.query(f)
                 val_metadata = val_metadata.reset_index(drop=True)
         else:
-            n_train = int(len(full_metadata) * self.train_split)
-            train_metadata = full_metadata.iloc[:n_train].reset_index(drop=True)
-            val_metadata = full_metadata.iloc[n_train:].reset_index(drop=True)
+            train_metadata, val_metadata = self._split(full_metadata)
 
         # Instantiate atom37_transforms if they're config dicts
         atom37_transforms = []
