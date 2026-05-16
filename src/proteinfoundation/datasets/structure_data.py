@@ -874,6 +874,15 @@ class StructureDataModule(L.LightningDataModule):
             if c not in train_clusters
             for i in cluster_to_rows[c]
         ]
+        if len(val_rows) == 0:
+            logger.warning(
+                "_cluster_aware_split: empty val split with "
+                f"cluster_column={self.cluster_column!r}, "
+                f"train_split={self.train_split}, "
+                f"n_clusters={len(unique_clusters)}, "
+                f"n_rows={len(full_metadata)}; "
+                "consider lowering train_split or using more clusters."
+            )
         train_meta = full_metadata.iloc[train_rows].reset_index(drop=True)
         val_meta = full_metadata.iloc[val_rows].reset_index(drop=True)
         return train_meta, val_meta
