@@ -1,0 +1,18 @@
+# AFDB monomers with per-residue AF2 pLDDT exposed for confidence-head
+# distillation. Drops the `plddt > 70` filter so the head trains on the full
+# pLDDT distribution and appends one atom37 transform that reads the AF2
+# B-factor and writes `plddt_residue`, `plddt_bin`, `plddt_mask`.
+
+defaults:
+  - afdb_monomers
+  - _self_
+
+datamodule:
+  filters:
+    - "length < 512"
+  atom37_transforms:
+    - _target_: proteinfoundation.datasets.transforms.AddPLDDTFromBFactor
+      bin_width: 2.0
+      max_bins: 50
+      scale_max: 100.0
+      sanity_check: true
