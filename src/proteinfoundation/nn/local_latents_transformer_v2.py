@@ -24,7 +24,39 @@ class LocalLatentsTransformer(torch.nn.Module):
     def __init__(self, **kwargs):
         """
         Initializes the NN. The seqs and pair representations used are just zero in case
-        no features are required."""
+        no features are required.
+
+        When ``expose_intermediates=True``, ``forward(input)`` additionally returns
+        ``nn_out['trunk_intermediates']`` carrying the post-trunk
+        ``(s, z, mask, orig_mask, n_orig)``. Default ``False``; bit-identical to
+        the legacy forward when off. The sidecar ``ConfidenceDistillationModule``
+        (PR-4) flips this on programmatically after instantiation — do not set
+        it in trunk Hydra configs. Toggle at construction or immediately
+        afterwards; do not flip during a training run (Dynamo guards on the
+        attribute and would trigger a graph recompile).
+
+        Returned ``trunk_intermediates`` contract (consumer responsibility):
+
+        - **Autograd.** Caller must either wrap ``forward`` in ``torch.no_grad()``
+          or freeze every trunk parameter with ``requires_grad_(False)``.
+          Otherwise the returned ``s`` and ``z`` retain autograd hooks into the
+          trunk subgraph; head backward then flows gradients through the trunk
+          (wasted memory in the frozen case; silent trunk-optimizer coupling in
+          the joint-training case). With every leaf frozen, PyTorch prunes the
+          graph automatically and the captures are safe without ``no_grad``.
+        - **Aliasing.** ``z`` and ``mask`` are *views* into trunk-internal
+          tensors. Do **not** mutate them in place. ``s`` and ``orig_mask`` are
+          fresh allocations and safe to mutate. If the consumer needs an
+          in-place op on ``z``, clone first.
+        - **Dtype.** ``s`` and ``z`` follow the active autocast dtype (``bf16``
+          under Lightning's ``bf16-mixed``, ``fp32`` otherwise). Consumers
+          needing fp32 reductions (e.g. smooth-L1 on the bin expected value)
+          should ``.float()`` before the loss.
+        - **Pair update semantics.** When ``update_pair_repr=True``, the
+          returned ``z`` is the pair_rep *after* the last pair-update layer
+          (the one the final transformer block consumed), not pair_rep refined
+          *by* the final block.
+        """
         super().__init__()
         self.nlayers = kwargs["nlayers"]
         self.token_dim = kwargs["token_dim"]
@@ -35,6 +67,7 @@ class LocalLatentsTransformer(torch.nn.Module):
         self.use_tri_attn = kwargs.get("use_tri_attn", False)
         self.use_qkln = kwargs["use_qkln"]
         self.output_param = kwargs["output_parameterization"]
+        self.expose_intermediates = bool(kwargs.get("expose_intermediates", False))
 
         # To form initial representation
         self.init_repr_factory = FeatureFactory(
@@ -292,7 +325,19 @@ class LocalLatentsTransformer(torch.nn.Module):
 
             ca_nm_out = ca_nm_out[:, :n_orig, :] * orig_mask[:, :, None]
 
+        s_out = seqs * mask[..., None]
+        z_out = pair_rep
+        intermediates = {
+            "s": s_out,
+            "z": z_out,
+            "mask": mask,
+            "orig_mask": orig_mask,
+            "n_orig": int(n_orig),
+        }
+
         nn_out = {}
         nn_out["bb_ca"] = {self.output_param["bb_ca"]: ca_nm_out}
         nn_out["local_latents"] = {self.output_param["local_latents"]: local_latents_out}
+        if self.expose_intermediates:
+            nn_out["trunk_intermediates"] = intermediates
         return nn_out
