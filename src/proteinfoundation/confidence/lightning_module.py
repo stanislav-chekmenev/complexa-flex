@@ -8,17 +8,21 @@
   `requires_grad_(False)`, and `.eval()`),
 - a trainable `BaseConfidenceHead` (the PR-3 head).
 
-Forward path per batch:
+Forward path per batch (all pre-head steps under `torch.no_grad()`):
 
-1. Build `cond` once by stamping `batch['t'][<modality>] = trunk_eval_t`
-   for every modality the trunk's `cond_factory` consumes, then forwarding
-   `cond_factory(batch)`. This keeps the head in the AdaLN regime the
-   trunk was trained for.
-2. Under `torch.no_grad()`, call `proteina.nn(batch)` to get
-   `trunk_intermediates = {s, z, mask, orig_mask, n_orig}`.
-3. Call `head(s, z, mask, cond)` and slice the logits / labels to
+1. `add_clean_samples` populates `batch['x_1']` per modality.
+2. `fm.corrupt_batch` populates `x_0`, `x_1`, `x_t`, `t` per modality.
+3. `t` is overwritten to `trunk_eval_t` and `x_t` is recomputed via
+   `fm.interpolate` so the trunk sees a deterministic on-distribution
+   regime. This keeps the head in the AdaLN regime the trunk was
+   trained for.
+4. `proteina.nn(batch)` returns `trunk_intermediates = {s, z, mask,
+   orig_mask, n_orig}`.
+5. `_compute_cond(batch)` runs the trunk's `cond_factory` on the same
+   `t`-pinned batch (still under no_grad), producing `[b, n, dim_cond]`.
+6. `head(s, z, mask, cond)` (trainable); logits sliced to
    `orig_mask & batch['plddt_mask']`.
-4. `combined_plddt_loss` with `ce_weight / smooth_l1_weight`.
+7. `combined_plddt_loss` with `ce_weight / smooth_l1_weight`.
 
 Frozen-trunk caveat: Lightning calls `model.train()` at the start of every
 epoch. The defensive hooks `on_train_epoch_start` / `on_train_batch_start`
