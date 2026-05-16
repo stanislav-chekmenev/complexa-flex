@@ -47,7 +47,8 @@ class _SplitProbe(StructureDataModule):
 
 
 def _split_dm(metadata: Path, **kwargs) -> tuple[pd.DataFrame, pd.DataFrame]:
-    dm = _SplitProbe(metadata_file=str(metadata), train_split=0.9, **kwargs)
+    kwargs.setdefault("train_split", 0.9)
+    dm = _SplitProbe(metadata_file=str(metadata), **kwargs)
     dm.setup()
     return dm._train_meta, dm._val_meta
 
@@ -97,3 +98,91 @@ def test_missing_column_falls_back_with_warning(tmp_path: Path, caplog) -> None:
     assert train["id"].tolist() == full.iloc[:n_train]["id"].tolist()
     assert val["id"].tolist() == full.iloc[n_train:]["id"].tolist()
     assert any("unicluster" in m for m in msgs)
+
+
+def _make_skewed_metadata(tmp_path: Path) -> Path:
+    rows = []
+    for j in range(80):
+        rows.append(
+            {
+                "id": f"id_big_{j}",
+                "path": f"file_big_{j}.pdb",
+                "unicluster": "cluster_big",
+            }
+        )
+    for cluster_id in range(9):
+        for j in range(2):
+            rows.append(
+                {
+                    "id": f"id_small_{cluster_id}_{j}",
+                    "path": f"file_small_{cluster_id}_{j}.pdb",
+                    "unicluster": f"cluster_small_{cluster_id}",
+                }
+            )
+    df = pd.DataFrame(rows)
+    out = tmp_path / "skewed_metadata.parquet"
+    df.to_parquet(out)
+    return out
+
+
+def test_skewed_cluster_split(tmp_path: Path) -> None:
+    """One dominant cluster of 80 rows + nine tiny clusters of 2 rows.
+
+    Whole clusters must land on one side; total preserved; the dominant
+    cluster lands deterministically given the seed.
+    """
+    meta_path = _make_skewed_metadata(tmp_path)
+    train, val = _split_dm(meta_path, cluster_column="unicluster", cluster_seed=42)
+    full = pd.read_parquet(meta_path)
+    assert len(train) + len(val) == len(full)
+    train_clusters = set(train["unicluster"].unique())
+    val_clusters = set(val["unicluster"].unique())
+    assert train_clusters.isdisjoint(val_clusters)
+    train2, val2 = _split_dm(meta_path, cluster_column="unicluster", cluster_seed=42)
+    assert train["id"].tolist() == train2["id"].tolist()
+    assert val["id"].tolist() == val2["id"].tolist()
+
+
+def _make_two_cluster_metadata(tmp_path: Path) -> Path:
+    rows = []
+    for cluster_id in range(2):
+        for j in range(50):
+            rows.append(
+                {
+                    "id": f"id_{cluster_id}_{j}",
+                    "path": f"file_{cluster_id}_{j}.pdb",
+                    "unicluster": f"cluster_{cluster_id}",
+                }
+            )
+    df = pd.DataFrame(rows)
+    out = tmp_path / "two_cluster_metadata.parquet"
+    df.to_parquet(out)
+    return out
+
+
+def test_empty_val_warning(tmp_path: Path) -> None:
+    """High train_split over few clusters can produce an empty val split.
+
+    The split must emit a loguru warning naming the cluster column,
+    train_split, n_clusters, n_rows and proceed (Lightning surfaces the
+    empty-dataloader error downstream).
+    """
+    meta_path = _make_two_cluster_metadata(tmp_path)
+    from loguru import logger as loguru_logger
+
+    msgs: list[str] = []
+    sink_id = loguru_logger.add(lambda msg: msgs.append(str(msg)), level="WARNING")
+    try:
+        train, val = _split_dm(
+            meta_path, cluster_column="unicluster", cluster_seed=42, train_split=0.99
+        )
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert len(val) == 0
+    assert any("empty val split" in m for m in msgs), (
+        f"expected empty-val warning, got messages: {msgs}"
+    )
+    joined = " ".join(msgs)
+    assert "unicluster" in joined
+    assert "train_split" in joined or "0.99" in joined
