@@ -30,7 +30,7 @@ def test_plddt_accuracy_hand_computed() -> None:
     k = 4
     logits = torch.zeros(1, 4, k)
     logits[0, 0, 0] = 10.0
-    logits[0, 1, 1] = 10.0
+    logits[0, 1, 2] = 10.0
     logits[0, 2, 0] = 10.0
     logits[0, 3, 3] = 10.0
     labels = torch.tensor([[0, 1, 2, 3]], dtype=torch.int64)
