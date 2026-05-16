@@ -258,3 +258,39 @@ def test_reliability_diagram_npy_fallback_written(tmp_path: Path) -> None:
     assert len(npy_files) >= 1
     arr = np.load(npy_files[0])
     assert arr.shape[1] == 3
+
+
+def test_reliability_diagram_aggregates_across_full_val_epoch(tmp_path: Path) -> None:
+    """The diagram must aggregate over the full val epoch, not stash one batch.
+
+    Drives 4 val items in batches of 2 (2 batches). The total `count`
+    column of the diagram must equal the sum of masked residues across
+    *both* batches, not just the last one.
+    """
+    mod = _make_module(reliability_diagram_every_n_epochs=1)
+    n_items = 4
+    n_res = 8
+    loader = DataLoader(_DummyValDataset(n_items=n_items, n_res=n_res), batch_size=2, collate_fn=_collate)
+    trainer = L.Trainer(
+        max_epochs=1,
+        accelerator="cpu",
+        devices=1,
+        default_root_dir=str(tmp_path),
+        logger=False,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        num_sanity_val_steps=0,
+        limit_train_batches=0,
+        limit_val_batches=1.0,
+    )
+    trainer.validate(mod, dataloaders=loader)
+    npy_files = sorted(Path(trainer.log_dir).glob("reliability_epoch_*.npy"))
+    assert len(npy_files) >= 1
+    arr = np.load(npy_files[-1])
+    total_count = float(arr[:, 2].sum())
+    expected_total = float(n_items * n_res)
+    assert total_count == expected_total, (
+        f"reliability diagram total count {total_count} != expected {expected_total} "
+        f"(should be sum across all val batches in the epoch, not just the last)"
+    )
