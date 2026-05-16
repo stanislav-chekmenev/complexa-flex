@@ -48,7 +48,6 @@ class ConfidenceTrunk(nn.Module):
         use_qkln: bool = True,
         dropout: float = 0.1,
         update_pair_repr_every_n: int = 1,
-        expects_external_cond: bool = True,
     ) -> None:
         super().__init__()
         self.token_dim = token_dim
@@ -57,7 +56,6 @@ class ConfidenceTrunk(nn.Module):
         self.n_heads = n_heads
         self.dim_cond = dim_cond
         self.update_pair_repr_every_n = update_pair_repr_every_n
-        self.expects_external_cond = expects_external_cond
 
         self.transformer_layers = nn.ModuleList(
             [
@@ -181,9 +179,9 @@ class BaseConfidenceHead(nn.Module, ABC):
     ) -> dict[str, torch.Tensor]:
         """Run trunk then `_predict`.
 
-        `chain_id` is reserved for future ipTM / ipAE / ipLDDT subclasses;
-        unused by `PLDDTHead`. Defaults to zeros (monomer) inside the
-        forward when `None`.
+        `chain_id` is accepted but currently ignored; the seat is reserved
+        for future ipTM / ipAE / ipLDDT subclasses that need per-residue
+        chain identity. `PLDDTHead` does not consume it.
 
         The head does **not** trim concat-features; the caller decides
         whether to slice `[:, :n_orig]` using `orig_mask`.

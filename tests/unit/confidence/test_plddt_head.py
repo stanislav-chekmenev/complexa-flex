@@ -93,3 +93,11 @@ def test_bin_centers_are_buffer_and_correct() -> None:
     centers = head.bin_centers
     expected = torch.tensor([1.0 + 2.0 * i for i in range(NUM_BINS)])
     assert torch.allclose(centers, expected, atol=1e-5)
+
+
+def test_logits_to_expected_value_tracks_dominant_bin() -> None:
+    head = _make_head()
+    logits = torch.zeros(B, N, NUM_BINS)
+    logits[..., 30] = 1e3
+    ev = head.logits_to_expected_value(logits)
+    assert torch.allclose(ev, torch.full_like(ev, 61.0), atol=0.5)

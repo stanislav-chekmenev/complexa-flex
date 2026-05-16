@@ -45,9 +45,10 @@ def test_build_from_yaml_via_target() -> None:
 
 def test_build_from_yaml_via_name() -> None:
     cfg = _compose_plddt_head_cfg()
-    cfg_no_target = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
-    del cfg_no_target["_target_"]
-    head = build_confidence_head_from_cfg(cfg_no_target)
+    cfg_named = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    del cfg_named["_target_"]
+    cfg_named["name"] = "plddt"
+    head = build_confidence_head_from_cfg(cfg_named)
     assert isinstance(head, PLDDTHead)
 
 

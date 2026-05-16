@@ -34,7 +34,6 @@ def _make_trunk(**overrides) -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
-        expects_external_cond=True,
     )
     kwargs.update(overrides)
     return ConfidenceTrunk(**kwargs).eval()

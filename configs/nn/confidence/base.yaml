@@ -10,4 +10,3 @@ trunk:
   use_qkln: True
   dropout: 0.1
   update_pair_repr_every_n: 1
-  expects_external_cond: True

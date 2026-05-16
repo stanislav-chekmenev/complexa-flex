@@ -64,4 +64,4 @@ class PLDDTHead(BaseConfidenceHead):
         """Softmax-weighted bin-center mean. fp32 internally."""
         logits_f = logits.float()
         probs = torch.softmax(logits_f, dim=-1)
-        return (probs * self.bin_centers.to(probs.dtype)).sum(dim=-1)
+        return (probs * self.bin_centers).sum(dim=-1)
