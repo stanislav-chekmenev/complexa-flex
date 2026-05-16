@@ -138,9 +138,7 @@ srun --kill-on-bad-exit uv run python -m proteinfoundation.confidence.train_conf
     --config-name=confidence/distillation_swissprot \
     trainer.devices=$NUM_DEVICES \
     trainer.strategy=ddp_find_unused_parameters_false \
-    trainer.precision=bf16-mixed \
-    confidence.trunk_ckpt_path="$CKPT_DIR_DST/complexa.ckpt" \
-    confidence.autoencoder_ckpt_path="$CKPT_DIR_DST/complexa_ae.ckpt"
+    trainer.precision=bf16-mixed
 
 # --- Rsync run dir back to project ---
 echo "Syncing run dir back to project..."
