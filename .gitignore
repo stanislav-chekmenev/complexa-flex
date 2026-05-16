@@ -6,6 +6,10 @@
 # Data
 /data
 
+# Local-only archive of finished superpowers specs/plans/reviews; the
+# canonical copies live under docs/superpowers/ and are committed there.
+docs/archive/
+
 # Analysis
 analysis
 
