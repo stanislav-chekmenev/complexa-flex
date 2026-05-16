@@ -215,7 +215,14 @@ def test_only_head_params_get_grad_with_sequence_only_head() -> None:
     assert any(p.grad is not None and torch.isfinite(p.grad).all() for p in head_trainable)
 
 
-def test_predict_handles_n_orig_less_than_n_extended() -> None:
+def test_predict_zeros_padded_logits_under_partial_mask() -> None:
+    """Under a partial `mask_ext` (some positions False), the head must
+
+    return zero logits at those positions. This pins the masking contract
+    of `_predict`; the previous name implied an `n_orig != n_ext`
+    relationship the function does not actually consume (it only sees
+    `mask_ext` and is agnostic to which positions were concat-padded).
+    """
     head = _make_head()
     b, n_ext = 2, 12
     s = torch.randn(b, n_ext, TOKEN_DIM)
