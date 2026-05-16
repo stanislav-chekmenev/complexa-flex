@@ -10,6 +10,12 @@ defaults:
 datamodule:
   filters:
     - "length < 512"
+  columns_to_load:
+    - example_id
+    - path
+    - length
+    - plddt
+    - unicluster
   atom37_transforms:
     - _target_: proteinfoundation.datasets.transforms.AddPLDDTFromBFactor
       bin_width: 2.0

@@ -13,4 +13,3 @@ trunk:
   n_blocks: 2
   use_tri_mult: False
   use_tri_attn: False
-  update_pair_repr_every_n: 1000000
