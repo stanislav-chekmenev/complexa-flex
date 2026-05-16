@@ -1,0 +1,12 @@
+trunk:
+  _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
+  token_dim: 768
+  pair_repr_dim: 256
+  n_blocks: 4
+  n_heads: 16
+  dim_cond: 256
+  use_tri_mult: True
+  use_tri_attn: False
+  use_qkln: True
+  dropout: 0.1
+  update_pair_repr_every_n: 1

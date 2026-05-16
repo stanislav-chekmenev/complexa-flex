@@ -1,0 +1,10 @@
+defaults:
+  - base
+  - _self_
+
+_target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
+token_dim: 768
+pair_repr_dim: 256
+num_plddt_bins: 50
+bin_min: 0.0
+bin_max: 100.0
