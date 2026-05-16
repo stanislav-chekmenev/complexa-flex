@@ -49,6 +49,7 @@ from proteinfoundation.confidence.metrics import (
     spearman_r,
 )
 from proteinfoundation.nn.confidence.base import BaseConfidenceHead
+from proteinfoundation.utils.sample_utils import add_clean_samples
 
 
 def _autodetect_cond_modalities(cond_factory: nn.Module) -> tuple[str, ...]:
@@ -174,17 +175,14 @@ class ConfidenceDistillationModule(L.LightningModule):
             self.proteina.nn.expose_intermediates = True
 
     def _compute_cond(self, batch: dict) -> torch.Tensor:
-        mask = batch["mask"]
-        b = mask.shape[0]
-        device = mask.device
-        t_dict = {
-            m: torch.full((b,), self.trunk_eval_t, device=device, dtype=torch.float32)
-            for m in self._cond_modalities
-        }
-        cond_batch = dict(batch)
-        cond_batch["t"] = t_dict
-        cond_batch["mask"] = mask
-        cond = self.proteina.nn.cond_factory(cond_batch)
+        """Trunk frozen; cond computed under no_grad on the sidecar-prepared batch.
+
+        The caller is responsible for stamping `batch['t']` to
+        `trunk_eval_t` *before* invoking this; this keeps the head in the
+        AdaLN regime the trunk was trained for.
+        """
+        with torch.no_grad():
+            cond = self.proteina.nn.cond_factory(batch)
         expected_dim = getattr(self.head.trunk, "dim_cond", None)
         if expected_dim is not None and cond.shape[-1] != expected_dim:
             raise ValueError(
@@ -194,9 +192,36 @@ class ConfidenceDistillationModule(L.LightningModule):
         return cond
 
     def _forward(self, batch: dict) -> dict[str, torch.Tensor]:
-        cond = self._compute_cond(batch)
         with torch.no_grad():
+            batch = add_clean_samples(
+                batch,
+                self.proteina.cfg_exp.product_flowmatcher,
+                getattr(self.proteina, "autoencoder", None),
+            )
+            batch = self.proteina.fm.corrupt_batch(batch)
+            b = batch["mask"].shape[0]
+            device = batch["mask"].device
+            t_pinned = {
+                m: torch.full(
+                    (b,),
+                    self.trunk_eval_t,
+                    device=device,
+                    dtype=batch["t"][m].dtype,
+                )
+                for m in batch["t"]
+            }
+            batch["t"] = t_pinned
+            batch["x_t"] = self.proteina.fm.interpolate(
+                x_0=batch["x_0"],
+                x_1=batch["x_1"],
+                t=t_pinned,
+                mask=batch["mask"],
+            )
+
+            self.proteina.nn.expose_intermediates = True
             nn_out = self.proteina.nn(batch)
+
+        cond = self._compute_cond(batch)
         inter = nn_out["trunk_intermediates"]
         s = inter["s"]
         z = inter["z"]
