@@ -145,6 +145,92 @@ def expected_calibration_error(
     return ece
 
 
+def expected_calibration_error_adaptive(
+    logits: Tensor,
+    labels_bin: Tensor,
+    mask: Tensor,
+    num_bins_ece: int = 15,
+) -> Tensor:
+    """Top-1 vs accuracy ECE with **equal-mass** confidence buckets.
+
+    Bucket boundaries are top-1-probability quantiles taken on the masked
+    residue distribution; this avoids the equal-width buckets' pathology
+    where 99 % of probability mass lives in the top bucket. Ties on
+    identical top-1 confidences are absorbed by the highest bucket via the
+    closed upper edge of the final bin (`<=` rather than `<`).
+
+    Returns a 0-dim fp32 tensor in `[0, 1]`; all-masked input returns 0.
+    """
+    probs = torch.softmax(logits.float(), dim=-1)
+    conf, pred = probs.max(dim=-1)
+    mask_b = mask.bool()
+    mask_f = mask.to(torch.float32)
+    correct = (pred == labels_bin).to(torch.float32) * mask_f
+    n_total = mask_f.sum()
+    if n_total.item() == 0.0:
+        return torch.zeros((), device=logits.device, dtype=torch.float32)
+
+    conf_valid = conf[mask_b]
+    q = torch.linspace(0.0, 1.0, num_bins_ece + 1, device=logits.device)
+    edges = torch.quantile(conf_valid, q)
+    edges[0] = 0.0
+    edges[-1] = 1.0
+
+    ece = torch.zeros((), device=logits.device, dtype=torch.float32)
+    for i in range(num_bins_ece):
+        lo, hi = edges[i], edges[i + 1]
+        if i == num_bins_ece - 1:
+            in_bin = (conf >= lo) & (conf <= hi)
+        else:
+            in_bin = (conf >= lo) & (conf < hi)
+        in_bin_f = in_bin.to(torch.float32) * mask_f
+        n_b = in_bin_f.sum()
+        if n_b.item() == 0.0:
+            continue
+        acc_b = (correct * in_bin_f).sum() / n_b
+        conf_b = (conf * in_bin_f).sum() / n_b
+        ece = ece + (n_b / n_total) * (acc_b - conf_b).abs()
+    return ece.to(torch.float32)
+
+
+def reliability_diagram(
+    logits: Tensor,
+    labels_bin: Tensor,
+    mask: Tensor,
+    num_bins_ece: int = 10,
+) -> Tensor:
+    """Per-bucket `(conf, acc, count)` table for a top-1-probability reliability plot.
+
+    Equal-width buckets over `[0, 1]` (same partition as
+    `expected_calibration_error`). Returns an `[num_bins_ece, 3]` fp32
+    tensor where row `b` is `(mean_conf_b, mean_acc_b, count_b)` and
+    empty buckets are `(0, 0, 0)`.
+    """
+    probs = torch.softmax(logits.float(), dim=-1)
+    conf, pred = probs.max(dim=-1)
+    mask_f = mask.to(torch.float32)
+    correct = (pred == labels_bin).to(torch.float32) * mask_f
+
+    edges = torch.linspace(0.0, 1.0, num_bins_ece + 1, device=logits.device)
+    out = torch.zeros((num_bins_ece, 3), device=logits.device, dtype=torch.float32)
+    for i in range(num_bins_ece):
+        lo, hi = edges[i], edges[i + 1]
+        if i == num_bins_ece - 1:
+            in_bin = (conf >= lo) & (conf <= hi)
+        else:
+            in_bin = (conf >= lo) & (conf < hi)
+        in_bin_f = in_bin.to(torch.float32) * mask_f
+        n_b = in_bin_f.sum()
+        if n_b.item() == 0.0:
+            continue
+        conf_b = (conf * in_bin_f).sum() / n_b
+        acc_b = (correct * in_bin_f).sum() / n_b
+        out[i, 0] = conf_b
+        out[i, 1] = acc_b
+        out[i, 2] = n_b
+    return out
+
+
 def plddt_mae_stratified(
     logits: Tensor,
     labels: Tensor,
