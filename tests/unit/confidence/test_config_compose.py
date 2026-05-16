@@ -20,8 +20,11 @@ CONFIG_DIR = REPO_ROOT / "configs"
 
 
 def _compose_distillation_cfg():
-    with initialize_config_dir(config_dir=str(CONFIG_DIR / "confidence"), version_base="1.3"):
-        return compose(config_name="distillation_swissprot")
+    import os
+
+    os.environ.setdefault("DATA_PATH", "/tmp")
+    with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base="1.3"):
+        return compose(config_name="confidence/distillation_swissprot")
 
 
 def test_dead_keys_dropped() -> None:

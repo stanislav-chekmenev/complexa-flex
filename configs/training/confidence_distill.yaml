@@ -1,7 +1,4 @@
-training_mode: "pure_distillation"
-loss_weight: 1.0
 trunk_eval_t: 0.99
-freeze_trunk: True
 trunk_ckpt_path: ${oc.env:CKPT_DIR,ckpts}/complexa.ckpt
 autoencoder_ckpt_path: ${oc.env:CKPT_DIR,ckpts}/complexa_ae.ckpt
 opt:
@@ -12,8 +9,8 @@ opt:
   min_lr: 5.0e-6
 loss:
   ce_weight: 0.7
-  smooth_l1_weight: 0.3
-  label_smoothing: 0.0
+  smooth_l1_weight: 0.1
+  label_smoothing: 0.05
 max_epochs: 50
 precision: bf16-mixed
 gradient_clip_val: 1.0
