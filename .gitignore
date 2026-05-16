@@ -106,7 +106,8 @@ tests/test_eval_generated/
 .rsync_lock/
 
 .pytest_tmp/
-.claude/
+.claude/*
+!.claude/agents/
 .dotnet/
 .gitconfig
 .gnupg/
