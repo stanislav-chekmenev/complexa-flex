@@ -814,6 +814,8 @@ class StructureDataModule(L.LightningDataModule):
         val_filters: list[str] | None = None,
         pad_max_total_tokens: int | None = None,
         pad_group_priority: list[str] | None = None,
+        cluster_column: str | None = None,
+        cluster_seed: int = 42,
         **pipeline_kwargs,
     ):
         super().__init__()
@@ -836,10 +838,63 @@ class StructureDataModule(L.LightningDataModule):
         self.val_filters = val_filters
         self.pad_max_total_tokens = pad_max_total_tokens
         self.pad_group_priority = pad_group_priority
+        self.cluster_column = cluster_column
+        self.cluster_seed = int(cluster_seed)
         self.pipeline_kwargs = pipeline_kwargs
 
         self.train_dataset = None
         self.val_dataset = None
+
+    def _cluster_aware_split(
+        self,
+        full_metadata: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        rng = np.random.default_rng(self.cluster_seed)
+        cluster_ids = full_metadata[self.cluster_column].to_numpy()
+        unique_clusters = np.unique(cluster_ids)
+        shuffled = unique_clusters.copy()
+        rng.shuffle(shuffled)
+
+        target_train = int(len(full_metadata) * self.train_split)
+        cluster_to_rows: dict[object, np.ndarray] = {
+            c: np.where(cluster_ids == c)[0] for c in shuffled
+        }
+        train_rows: list[int] = []
+        train_clusters: set[object] = set()
+        for c in shuffled:
+            if len(train_rows) >= target_train:
+                break
+            idxs = cluster_to_rows[c]
+            train_rows.extend(int(i) for i in idxs)
+            train_clusters.add(c)
+
+        val_rows = [
+            int(i)
+            for c in shuffled
+            if c not in train_clusters
+            for i in cluster_to_rows[c]
+        ]
+        train_meta = full_metadata.iloc[train_rows].reset_index(drop=True)
+        val_meta = full_metadata.iloc[val_rows].reset_index(drop=True)
+        return train_meta, val_meta
+
+    def _split(
+        self,
+        full_metadata: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        if self.cluster_column is not None:
+            if self.cluster_column not in full_metadata.columns:
+                logger.warning(
+                    f"cluster_column={self.cluster_column!r} requested but absent "
+                    f"from metadata columns {list(full_metadata.columns)}; falling "
+                    "back to row-order split."
+                )
+            else:
+                return self._cluster_aware_split(full_metadata)
+        n_train = int(len(full_metadata) * self.train_split)
+        train_metadata = full_metadata.iloc[:n_train].reset_index(drop=True)
+        val_metadata = full_metadata.iloc[n_train:].reset_index(drop=True)
+        return train_metadata, val_metadata
 
     def setup(self, stage: str | None = None):
         # Load metadata
@@ -864,9 +919,7 @@ class StructureDataModule(L.LightningDataModule):
                     val_metadata = val_metadata.query(f)
                 val_metadata = val_metadata.reset_index(drop=True)
         else:
-            n_train = int(len(full_metadata) * self.train_split)
-            train_metadata = full_metadata.iloc[:n_train].reset_index(drop=True)
-            val_metadata = full_metadata.iloc[n_train:].reset_index(drop=True)
+            train_metadata, val_metadata = self._split(full_metadata)
 
         # Instantiate atom37_transforms if they're config dicts
         atom37_transforms = []

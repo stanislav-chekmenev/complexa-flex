@@ -15,10 +15,13 @@ from proteinfoundation.confidence.losses import (
     plddt_to_bin,
 )
 from proteinfoundation.confidence.metrics import (
+    expected_calibration_error,
+    expected_calibration_error_adaptive,
     pearson_r,
     plddt_accuracy,
     plddt_mae,
     plddt_mae_stratified,
+    reliability_diagram,
     spearman_r,
 )
 
@@ -28,9 +31,12 @@ __all__ = [
     "masked_plddt_cross_entropy",
     "masked_smooth_l1_on_expected_value",
     "plddt_to_bin",
+    "expected_calibration_error",
+    "expected_calibration_error_adaptive",
     "pearson_r",
     "plddt_accuracy",
     "plddt_mae",
     "plddt_mae_stratified",
+    "reliability_diagram",
     "spearman_r",
 ]

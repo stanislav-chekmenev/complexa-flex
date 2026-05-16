@@ -1,6 +1,9 @@
 # @package _global_
+# Sequence-only diagnostic control run: shares everything with
+# `distillation_swissprot.yaml` except the head, which is swapped for
+# `SequenceOnlyPLDDTHead` to isolate the sequence signal.
 defaults:
-  - /nn/confidence/plddt_head@confidence.head
+  - /nn/confidence/plddt_sequence_only_head@confidence.head
   - /dataset/unified/afdb_monomers_with_plddt@data
   - /training/confidence_distill@training
   - _self_
@@ -29,11 +32,8 @@ trainer:
 
 data:
   datamodule:
-    # Override to `null` on environments where the parquet does not carry
-    # an MMseqs cluster column; the module logs a warning and falls back
-    # to the legacy row-order split.
     cluster_column: unicluster
     cluster_seed: 42
 
 seed: 42
-run_name: "plddt-distill-swissprot"
+run_name: "plddt-distill-swissprot-control"

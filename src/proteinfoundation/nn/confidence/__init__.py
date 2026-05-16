@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from proteinfoundation.nn.confidence.base import BaseConfidenceHead, ConfidenceTrunk
 from proteinfoundation.nn.confidence.plddt_head import PLDDTHead
+from proteinfoundation.nn.confidence.plddt_sequence_only_head import (
+    SequenceOnlyPLDDTHead,
+)
 from proteinfoundation.nn.confidence.projections import PairProjection, SeqProjection
 from proteinfoundation.nn.confidence.registry import (
     CONFIDENCE_HEAD_REGISTRY,
@@ -19,6 +22,7 @@ __all__ = [
     "BaseConfidenceHead",
     "ConfidenceTrunk",
     "PLDDTHead",
+    "SequenceOnlyPLDDTHead",
     "PairProjection",
     "SeqProjection",
     "CONFIDENCE_HEAD_REGISTRY",
