@@ -10,6 +10,7 @@ trunk wiring as the original module.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import lightning as L
 import torch
@@ -25,6 +26,8 @@ TOKEN_DIM = 32
 PAIR_REPR_DIM = 16
 DIM_COND = 16
 NUM_BINS = 50
+LATENT_DIM = 8
+TRUNK_EVAL_T = 0.99
 
 
 class _FakeCondFactory(nn.Module):
@@ -72,10 +75,65 @@ class _FakeProteinaNN(nn.Module):
         }
 
 
+class _FakeFM:
+    def __init__(self) -> None:
+        self.data_modes = ("bb_ca", "local_latents")
+
+    def corrupt_batch(self, batch: dict) -> dict:
+        mask = batch["mask"]
+        b, n = mask.shape
+        device = mask.device
+        x_1 = batch["x_1"]
+        x_0 = {
+            "bb_ca": torch.randn(b, n, 3, device=device),
+            "local_latents": torch.randn(b, n, LATENT_DIM, device=device),
+        }
+        t = {
+            "bb_ca": torch.rand(b, device=device),
+            "local_latents": torch.rand(b, device=device),
+        }
+        x_t = {
+            m: t[m][:, None, None] * x_1[m] + (1.0 - t[m][:, None, None]) * x_0[m]
+            for m in self.data_modes
+        }
+        batch["x_0"] = x_0
+        batch["x_1"] = x_1
+        batch["x_t"] = x_t
+        batch["t"] = t
+        return batch
+
+    def interpolate(
+        self,
+        x_0: dict[str, torch.Tensor],
+        x_1: dict[str, torch.Tensor],
+        t: dict[str, torch.Tensor],
+        mask: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        return {
+            m: t[m][:, None, None] * x_1[m] + (1.0 - t[m][:, None, None]) * x_0[m]
+            for m in x_1
+        }
+
+
+class _FakeAutoEncoder:
+    def __init__(self, latent_dim: int = LATENT_DIM) -> None:
+        self.latent_dim = latent_dim
+
+    def encode(self, batch: dict) -> dict:
+        mask = batch["mask"]
+        b, n = mask.shape
+        return {"z_latent": torch.zeros(b, n, self.latent_dim, device=mask.device)}
+
+
 class _FakeProteina(nn.Module):
     def __init__(self, dim_cond: int, token_dim: int, pair_repr_dim: int) -> None:
         super().__init__()
         self.nn = _FakeProteinaNN(dim_cond, token_dim, pair_repr_dim)
+        self.fm = _FakeFM()
+        self.autoencoder = _FakeAutoEncoder()
+        self.cfg_exp = SimpleNamespace(
+            product_flowmatcher=("bb_ca", "local_latents"),
+        )
 
 
 class _DummyDataset(Dataset):
@@ -86,6 +144,8 @@ class _DummyDataset(Dataset):
             self.items.append(
                 {
                     "mask": torch.ones(n_res, dtype=torch.bool),
+                    "coords": torch.zeros(n_res, 37, 3),
+                    "coords_nm": torch.zeros(n_res, 37, 3),
                     "plddt_residue": torch.rand(n_res) * 100.0,
                     "plddt_bin": torch.randint(0, NUM_BINS, (n_res,)),
                     "plddt_mask": torch.ones(n_res, dtype=torch.bool),
@@ -133,7 +193,7 @@ def _make_module() -> ConfidenceDistillationModule:
         head=head,
         proteina=fake_trunk,
         cond_modalities=("bb_ca", "local_latents"),
-        trunk_eval_t=0.99,
+        trunk_eval_t=TRUNK_EVAL_T,
     )
 
 
