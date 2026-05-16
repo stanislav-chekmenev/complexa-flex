@@ -7,8 +7,19 @@ Project-specific instructions for Claude working in this repository. These rules
 - **Project name.** Proteina-Complexa — atomistic flow-matching generative model for protein–protein and protein–ligand binder design, with test-time search over reward models (AF2 / RF3 / force fields), motif scaffolding (AME), and fold-class-conditioned generation.
 - **Distribution / package name.** `proteinfoundation` (see [pyproject.toml](pyproject.toml)). Source lives under [src/proteinfoundation/](src/proteinfoundation/). Do not invent parallel package names.
 - **Pinned environment.** uv-managed, Python 3.12, PyTorch 2.10 + CUDA 13, Hydra 1.3, Lightning ≥2.5,<2.6 (2.6.x breaks checkpoint loading). Use `uv run …` or activate `.venv/`. Never substitute plain PyPI torch wheels (CPU-only).
-- **Configs.** Hydra tree under [configs/](configs/) — `generation/`, `nn/`, `nn_ae/`, `pipeline/`, `dataset/`, `design_tasks/`, etc. Compose, don't duplicate. Mirror naming of existing entries (`search_binder_*`, `evaluate_*`, `analyze_*`).
+- **Configs.** Hydra tree under [configs/](configs/) — `generation/`, `nn/`, `nn_ae/`, `pipeline/`, `dataset/`, `design_tasks/`, `confidence/`, etc. Compose, don't duplicate. Mirror naming of existing entries (`search_binder_*`, `evaluate_*`, `analyze_*`).
 - **Runtime artefacts** (`ckpts/`, `wandb/`, sample/eval output trees) belong in `.gitignore`. Never commit weights, large PDB dumps, or run directories.
+
+## Confidence-head distillation subsystem
+
+A sidecar Lightning module distils AF2 per-residue pLDDT from the frozen complexa trunk into a trainable light-weight student head. **Does not modify** `proteinfoundation.proteina` or the main `train.py` entry point.
+
+- **Package layout.** [src/proteinfoundation/nn/confidence/](src/proteinfoundation/nn/confidence/) (heads + trunk + registry) and [src/proteinfoundation/confidence/](src/proteinfoundation/confidence/) (sidecar Lightning module + loss + metrics + Hydra entry point). Heads register via `@register_confidence_head(name)` so new heads (ipTM / ipAE / ipLDDT) drop in by subclassing `BaseConfidenceHead`.
+- **Entry point.** `python -m proteinfoundation.confidence.train_confidence --config-name=confidence/distillation_swissprot`. SLURM-launch via [scripts/train_confidence_swissprot.sbatch](scripts/train_confidence_swissprot.sbatch).
+- **Dataset.** [configs/dataset/unified/afdb_monomers_with_plddt.yaml](configs/dataset/unified/afdb_monomers_with_plddt.yaml) extends the AFDB monomer dataset with `AddPLDDTFromBFactor` (AF2 `[0, 100]` scale, 50 bins of width 2) and optional cluster-30% held-out split via `cluster_column: unicluster`.
+- **Loss / metrics.** Combined `0.7 * masked_CE + 0.1 * SmoothL1(EV)`, reduction `sum(loss * mask) / mask.sum().clamp_min(1)`. Validation logs accuracy, MAE (in pLDDT units), Pearson, Spearman, stratified MAE by pLDDT bucket, equal-width ECE, equal-mass adaptive ECE, and a per-bucket reliability diagram (rank-0 only).
+- **Trunk hook.** `LocalLatentsTransformer` has an opt-in `expose_intermediates: bool = False` kwarg. When `True`, `forward(input)` adds `nn_out["trunk_intermediates"]` carrying `(s, z, mask, orig_mask, n_orig)`. Default `False` is bit-identical to the legacy forward (enforced by `tests/regression/test_flow_matching_loss_unchanged.py` against a baseline fixture).
+- **AdaLN cond.** The sidecar reuses the trunk's existing `FeatureFactory` time embedder at `t = trunk_eval_t = 0.99` to produce the same `cond` the trunk consumes; zero-padded along the residue axis to `n_ext` if concat features extend the sequence.
 
 ## Subagent roster
 
