@@ -25,8 +25,7 @@ from proteinfoundation.nn.confidence.registry import build_confidence_head_from_
 
 
 def _build_trainer(cfg: DictConfig) -> L.Trainer:
-    trainer_kwargs = OmegaConf.to_container(cfg.trainer, resolve=True)
-    return L.Trainer(**trainer_kwargs)
+    return hydra.utils.instantiate(cfg.trainer, _convert_="partial")
 
 
 @hydra.main(
