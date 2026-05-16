@@ -1,9 +1,9 @@
 """Cond-construction tests for the distillation sidecar.
 
-`_compute_cond` stamps `batch['t'][<modality>] = trunk_eval_t` for every
-modality the trunk's `cond_factory` consumes, then forwards through
-`cond_factory` to produce `[b, n, dim_cond]`. It must be shape-correct,
-finite, and deterministic.
+`_compute_cond` forwards the sidecar-prepared batch (which already carries
+`batch['t'][<modality>]` pinned to `trunk_eval_t`) through the trunk's
+`cond_factory` under `torch.no_grad()` to produce `[b, n, dim_cond]`. It
+must be shape-correct, finite, and deterministic.
 """
 
 from __future__ import annotations
@@ -92,11 +92,20 @@ def _make_module() -> ConfidenceDistillationModule:
     return mod.eval()
 
 
+def _pinned_batch(b: int, n: int, trunk_eval_t: float = 0.99) -> dict:
+    return {
+        "mask": torch.ones(b, n, dtype=torch.bool),
+        "t": {
+            "bb_ca": torch.full((b,), trunk_eval_t),
+            "local_latents": torch.full((b,), trunk_eval_t),
+        },
+    }
+
+
 def test_compute_cond_shape_and_finite() -> None:
     mod = _make_module()
     b, n = 2, 11
-    batch = {"mask": torch.ones(b, n, dtype=torch.bool)}
-    cond = mod._compute_cond(batch)
+    cond = mod._compute_cond(_pinned_batch(b, n))
     assert cond.shape == (b, n, DIM_COND)
     assert torch.isfinite(cond).all()
 
@@ -104,7 +113,7 @@ def test_compute_cond_shape_and_finite() -> None:
 def test_compute_cond_deterministic() -> None:
     mod = _make_module()
     b, n = 3, 7
-    batch = {"mask": torch.ones(b, n, dtype=torch.bool)}
+    batch = _pinned_batch(b, n)
     c1 = mod._compute_cond(batch)
     c2 = mod._compute_cond(batch)
     assert torch.equal(c1, c2)

@@ -79,8 +79,8 @@ class ConfidenceDistillationModule(L.LightningModule):
     def __init__(
         self,
         head: BaseConfidenceHead,
-        trunk_ckpt_path: str,
-        autoencoder_ckpt_path: str,
+        trunk_ckpt_path: str = "",
+        autoencoder_ckpt_path: str = "",
         trunk_eval_t: float = 0.99,
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
@@ -88,14 +88,14 @@ class ConfidenceDistillationModule(L.LightningModule):
         warmup_steps: int = 500,
         min_lr: float = 5e-6,
         ce_weight: float = 0.7,
-        smooth_l1_weight: float = 0.3,
-        label_smoothing: float = 0.0,
+        smooth_l1_weight: float = 0.1,
+        label_smoothing: float = 0.05,
         cond_modalities: tuple[str, ...] | None = None,
         proteina: nn.Module | None = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(
-            ignore=["head", "proteina"],
+            ignore=["head", "proteina", "trunk_ckpt_path", "autoencoder_ckpt_path"],
         )
         self.head = head
         if proteina is None:
@@ -134,8 +134,8 @@ class ConfidenceDistillationModule(L.LightningModule):
         warmup_steps: int = 500,
         min_lr: float = 5e-6,
         ce_weight: float = 0.7,
-        smooth_l1_weight: float = 0.3,
-        label_smoothing: float = 0.0,
+        smooth_l1_weight: float = 0.1,
+        label_smoothing: float = 0.05,
     ) -> "ConfidenceDistillationModule":
         """Construct without loading from disk. Used by tests and PR-5 smoke."""
         return cls(
