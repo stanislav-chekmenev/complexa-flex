@@ -51,8 +51,8 @@ def dimers_full():
 
 @pytest.fixture(scope="module")
 def joined_locator(dimers_full):
-    """Build the full locator, dropping dimers whose parent monomer is not in
-    the local AFDB master inventory (it only covers ~12% of AFDB v4)."""
+    """Build the full locator, dropping any dimers whose parent monomer is
+    missing from the local AFDB master inventory."""
     from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     return build_locator_rows(dimers_full, AFDB_INVENTORY, on_missing="drop")
