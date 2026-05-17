@@ -17,12 +17,12 @@ The check has two prongs:
 
 from __future__ import annotations
 
-import gzip
-import json
 from pathlib import Path
 from typing import Sequence
 
 import pandas as pd
+
+from proteinfoundation.datasets.teddymer.io import read_confidence_from_tar  # noqa: F401  (re-export)
 
 
 def recompute_avg_int_plddt(chain_a: Sequence[int], chain_b: Sequence[int]) -> float:
@@ -36,18 +36,6 @@ def recompute_avg_int_plddt(chain_a: Sequence[int], chain_b: Sequence[int]) -> f
     if not digits:
         return 0.0
     return sum(10.0 * d for d in digits) / len(digits)
-
-
-def read_confidence_from_tar(tar_path: Path, offset: int, size: int) -> list[float]:
-    """Pull a gzipped AFDB ``*-confidence_v4.json.gz`` member from ``tar_path``
-    at byte ``offset`` (data offset, not header offset) and length ``size``,
-    decode the JSON, and return the per-residue confidence-score list.
-    """
-    with open(tar_path, "rb") as f:
-        f.seek(int(offset))
-        blob = f.read(int(size))
-    obj = json.loads(gzip.decompress(blob))
-    return [float(x) for x in obj["confidenceScore"]]
 
 
 def _chain_a_locator_row(locator: pd.DataFrame, dimer_index: int) -> dict:

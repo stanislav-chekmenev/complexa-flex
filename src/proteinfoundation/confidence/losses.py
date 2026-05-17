@@ -39,6 +39,32 @@ def plddt_to_bin(
     return (plddt / bin_width).floor().clamp(0, num_bins - 1).to(torch.int64)
 
 
+def pae_to_bin(
+    pae: torch.Tensor | float,
+    bin_width: float = 0.5,
+    num_bins: int = 64,
+) -> torch.Tensor:
+    """Discretise predicted aligned error onto integer bin indices.
+
+    The AF2 PAE head emits values in `[0, 31.75]` Angstrom; the default
+    `(num_bins=64, bin_width=0.5)` partitions that range into 64 disjoint
+    bins of width 0.5 Angstrom, matching the AF2 PAE-head convention.
+    Inputs above the top edge clamp to `num_bins - 1`; inputs below zero
+    clamp to `0`.
+
+    Args:
+        pae: Continuous PAE values in Angstrom, any shape. Accepts a scalar.
+        bin_width: Width of each PAE bin in Angstrom.
+        num_bins: Number of bins. Output is clamped to `[0, num_bins - 1]`.
+
+    Returns:
+        `torch.int64` tensor of the same shape as `pae`.
+    """
+    if not torch.is_tensor(pae):
+        pae = torch.tensor(pae, dtype=torch.float32)
+    return (pae / bin_width).floor().clamp(0, num_bins - 1).to(torch.int64)
+
+
 def _mask_reduce(per_residue: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     mask_f = mask.to(per_residue.dtype)
     denom = mask_f.sum().clamp_min(1.0)
