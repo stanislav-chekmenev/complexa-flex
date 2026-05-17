@@ -9,7 +9,7 @@
 The Teddymer view on disk is now **complete and ready to be consumed by a dataloader**, but no dataloader / dataset config exists yet. The remaining work is two PRs:
 
 1. **PR-A — data plumbing.** Add `configs/dataset/unified/teddymer_with_plddt_and_pae.yaml` + `AddPLDDTFromParentAFDB` + `AddPAEFromParentAFDB` transforms + a structural Cα-Cα spot-check.
-2. **PR-B — model plumbing.** Move pair-rep symmetrisation out of the trunk into per-head `_predict` so the asymmetric PAE head can opt out. Add the asymmetric PAE head class + Hydra config + sidecar training entry.
+2. **PR-B — model plumbing.** Move pair-rep symmetrisation out of the trunk into per-head `_predict` so the asymmetric PAE head can opt out. Add the asymmetric PAE head class + a `MultiHeadConfidence` wrapper that runs the trunk once and dispatches `(s, z)` to multiple registered child heads (joint-training opt-in; single-head runs keep working unchanged) + Hydra configs + sidecar training entries.
 
 PR-A should land first because PR-B's training run depends on it. PR-A can be done in parallel sub-PRs by domain agents because the transforms and the config are independent.
 
@@ -76,7 +76,7 @@ Read these files first — your work should be structurally analogous.
 - `AddPLDDTFromBFactor` (in [src/proteinfoundation/datasets/transforms.py](../../src/proteinfoundation/datasets/transforms.py)) — the transform template. Reads CA-atom B-factors from the in-memory CIF, bins into 50 bins of width 2 on `[0, 100]`, writes `plddt_residue`, `plddt_bin`, `plddt_mask`.
 - [src/proteinfoundation/nn/confidence/registry.py](../../src/proteinfoundation/nn/confidence/registry.py) — `@register_confidence_head(name)` decorator. New heads subclass `BaseConfidenceHead` in [src/proteinfoundation/nn/confidence/base.py](../../src/proteinfoundation/nn/confidence/base.py) and override `_predict`.
 - [src/proteinfoundation/nn/confidence/plddt_head.py](../../src/proteinfoundation/nn/confidence/plddt_head.py) — the head template. Single-residue head, symmetric (consumes `s`, ignores `z` symmetry).
-- [src/proteinfoundation/confidence/lightning_module.py](../../src/proteinfoundation/confidence/lightning_module.py) + [losses.py](../../src/proteinfoundation/confidence/losses.py) + [metrics.py](../../src/proteinfoundation/confidence/metrics.py) — sidecar Lightning module. Loss is `0.7 * masked_CE + 0.1 * SmoothL1(EV)`. Read these to see the metric pattern (acc, MAE, Pearson, Spearman, stratified MAE, ECE, reliability diagram) you'll re-use / extend.
+- [src/proteinfoundation/confidence/lightning_module.py](../../src/proteinfoundation/confidence/lightning_module.py) + [losses.py](../../src/proteinfoundation/confidence/losses.py) + [metrics.py](../../src/proteinfoundation/confidence/metrics.py) — sidecar Lightning module. Loss is `0.9 * masked_CE + 0.1 * SmoothL1(EV)`. Read these to see the metric pattern (acc, MAE, Pearson, Spearman, stratified MAE, ECE, reliability diagram) you'll re-use / extend.
 - [src/proteinfoundation/confidence/train_confidence.py](../../src/proteinfoundation/confidence/train_confidence.py) — Hydra entry point. Mirror this for the PAE head training entry.
 - [scripts/train_confidence_swissprot.sbatch](../../scripts/train_confidence_swissprot.sbatch) — SLURM wrapper template.
 
@@ -135,7 +135,17 @@ Domain-add:
 
 ### Scope
 
-Add an asymmetric PAE head and refactor the trunk so symmetric heads (pLDDT, future PDE / ipLDDT / ipTM) can opt in to symmetrisation and asymmetric heads (PAE) can opt out.
+Three coupled changes:
+
+1. Refactor the trunk so symmetric heads (pLDDT, future PDE / ipLDDT / ipTM) can opt in to symmetrisation and asymmetric heads (PAE) can opt out.
+2. Add an asymmetric `PaeHead` class.
+3. Add a `MultiHeadConfidence` wrapper that holds an `nn.ModuleDict` of registered child heads, runs the trunk once per batch, and dispatches the *same* `(s, z, mask, cond)` to every child's `_predict`. Joint training is then a single Hydra config flip; single-head training (`PlddtHead`-only on SwissProt, `PaeHead`-only on Teddymer) keeps working unchanged.
+
+**MultiHeadConfidence contract (load-bearing for the wrapper's correctness):**
+- Itself a `BaseConfidenceHead` subclass so the sidecar Lightning module addresses it through the same registry — no changes to the sidecar's head-instantiation path.
+- `_predict(s, z, mask, cond)` returns a dict `{head_name: prediction_tensor}` with each child's native shape.
+- Asserts in `__init__` that every child head's `expected_trunk_eval_t` matches the wrapper's (CLAUDE.md pins `trunk_eval_t = 0.99`). A future head wanting a different `t` would need its own trunk forward and therefore cannot live under this wrapper — fail loudly at construction, not silently at training time.
+- Computes no loss itself. Loss aggregation lives in `MultiHeadLoss` in the sidecar.
 
 ### Test plan
 
@@ -159,6 +169,17 @@ Add an asymmetric PAE head and refactor the trunk so symmetric heads (pLDDT, fut
    - One Lightning training step on ≤4 Teddymer dimers (use the 50-dimer subset PR-A's spot-check uses to keep IO cheap).
    - Asserts loss decreases over 10 steps on the same micro-batch (overfit-one-batch smoke).
 
+6. `tests/unit/nn/confidence/test_multi_head_wrapper.py`
+   - Instantiate `MultiHeadConfidence` holding `PlddtHead` + `PaeHead`. Assert one forward pass returns a dict with both keys at the right shapes (`(B, L, 50)` and `(B, L, L, 64)` respectively).
+   - **Trunk-once invariant.** Mock `ConfidenceTrunk.forward`; assert it is called exactly once per wrapper forward regardless of how many children are registered.
+   - **Per-head missing-label tolerance.** Build a batch where `plddt_mask` is all-True and `pae_mask` is all-False; assert the forward pass completes and the PAE-head contribution to the total loss is exactly zero (not NaN-from-empty-mean).
+   - **`expected_trunk_eval_t` mismatch.** Construct a fake child head with `expected_trunk_eval_t = 0.5`; assert `MultiHeadConfidence.__init__` raises with a message naming the offending head.
+
+7. `tests/unit/confidence/test_multi_head_loss_weighting.py`
+   - `MultiHeadLoss({plddt: 1.0, pae: 0.0})` on a batch with both labels present equals the single-head `plddt` loss to within fp32 tolerance (weight-zero head is fully disabled, including its gradient path).
+   - With weights `{plddt: 0.7, pae: 0.7}` and a non-zero mask for both heads, gradients flow to both heads' parameters AND the trunk; with `{plddt: 0.0, pae: 1.0}`, gradients flow only to the PAE head + trunk (assert PlddtHead params receive `None` or zero grad).
+   - The logged per-task scalars dict contains one entry per child head and the total matches `sum(w_i * L_i)` to within fp32 tolerance.
+
 ### Implementation deliverables
 
 - [src/proteinfoundation/nn/confidence/base.py](../../src/proteinfoundation/nn/confidence/base.py): move `z = (z + z.transpose(-3, -2)) / 2.0` out of `ConfidenceTrunk.forward` (currently line 129).
@@ -172,9 +193,41 @@ Add an asymmetric PAE head and refactor the trunk so symmetric heads (pLDDT, fut
 
 - [src/proteinfoundation/confidence/metrics.py](../../src/proteinfoundation/confidence/metrics.py): add pair-level analogues — accuracy, MAE in Å, Pearson, Spearman, stratified MAE by predicted-PAE bucket, equal-width and equal-mass adaptive ECE. Add per-distance-stratified MAE (`d_ij < 8`, `8 ≤ d_ij < 16`, `d_ij ≥ 16` Å) — interfaces are the high-value regime.
 
-- `configs/confidence/distillation_teddymer_pae.yaml` — analogue of [configs/confidence/distillation_swissprot.yaml](../../configs/confidence/distillation_swissprot.yaml). Points dataset at `teddymer_with_plddt_and_pae`, head at `pae`, loss/metric blocks at PAE variants.
+- `configs/confidence/distillation_teddymer_pae.yaml` — analogue of [configs/confidence/distillation_swissprot.yaml](../../configs/confidence/distillation_swissprot.yaml). Points dataset at `teddymer_with_plddt_and_pae`, head at `pae` (single-head config — for the clean PAE-alone reference run), loss/metric blocks at PAE variants.
 
-- `scripts/train_confidence_teddymer_pae.sbatch` — analogue of [scripts/train_confidence_swissprot.sbatch](../../scripts/train_confidence_swissprot.sbatch).
+- `src/proteinfoundation/nn/confidence/multi_head.py` — new file. `@register_confidence_head("multi_head")`. Subclass `BaseConfidenceHead`. Holds `nn.ModuleDict[name -> BaseConfidenceHead]` of children instantiated from Hydra. `_predict` runs each child on the same `(s, z, mask, cond)` and returns `{head_name: prediction}`. `__init__` asserts `expected_trunk_eval_t` matches across children. The wrapper itself owns no learnable parameters beyond its children's.
+
+- `src/proteinfoundation/confidence/losses.py` — add `MultiHeadLoss(per_head_losses: dict, per_head_weights: dict)`.
+  - Returns `(total_loss, {head_name: scalar_loss})` for logging.
+  - Per-head loss is computed against the matching `*_mask` from the batch; a head whose entire batch mask is False contributes exactly zero (skip its loss call, do not feed an all-False mask through `mean()`).
+  - Weight-zero head is a hard short-circuit: do not call its loss at all (saves compute and guarantees zero gradient).
+
+- `configs/confidence/distillation_teddymer_multihead.yaml` — analogue of `distillation_teddymer_pae.yaml` but `head:` resolves to the `multi_head` wrapper. Shape:
+  ```yaml
+  head:
+    _target_: ...MultiHeadConfidence
+    children:
+      plddt:
+        _target_: ...PlddtHead
+        # within-head weights (CE vs SmoothL1 on EV): same recipe family as the single-head
+        # SwissProt run. These are independent of the across-head weight below.
+        loss:
+          ce_weight: 0.9
+          ev_weight: 0.1
+        # across-head weight: multiplies this head's total loss before summing with siblings.
+        # Set to 0.0 to disable a head without removing it from the wrapper (useful for
+        # ablations and for the PAE-alone reference run via the multi-head config).
+        weight: 0.7
+      pae:
+        _target_: ...PaeHead
+        loss:
+          ce_weight: 0.9
+          ev_weight: 0.1
+        weight: 0.7
+  ```
+  Three numbers per head, separated by layer: two within-head loss-component weights (`ce_weight`, `ev_weight`) and one across-head weight (`weight`). The yaml comments above must ship with the config — they document the only tuning surface a future operator will see for joint training.
+
+- `scripts/train_confidence_teddymer_pae.sbatch` — analogue of [scripts/train_confidence_swissprot.sbatch](../../scripts/train_confidence_swissprot.sbatch). Single sbatch is enough; the multi-head run uses the same sbatch with `--config-name=distillation_teddymer_multihead`.
 
 ### Reviewers for PR-B
 
@@ -206,6 +259,7 @@ Per CLAUDE.md, the main thread coordinates and dispatches subagents:
 - **Filter at dataset-load or at experiment-config?** Memory says Complexa trained on the 510k `complexa_filter`-passing subset. Recommend exposing all 587k via the dataset and filtering at experiment-config time — keeps the dataset reusable for ablations that want the noisier 587k.
 - **PAE bin edges.** AF2 uses 64 bins on `[0, 31.75]` Å. Confirm we mirror that exactly (load-bearing for any later distillation-into-multimer-PAE comparison).
 - **Trunk symmetrisation refactor: option (a) or (b)?** Recommend (b) per CLAUDE.md. Confirm before refactor lands; option (a) is the quick rollback if (b) causes unexpected breakage.
+- **First PAE run: single-head or multi-head?** With the `MultiHeadConfidence` wrapper available, both modes are one Hydra config flip apart. Recommend the *single-head* `distillation_teddymer_pae.yaml` first to establish a clean PAE-alone reference number (no joint-loss-weight tuning confound). Then enable the multi-head config with co-trained pLDDT and compare. The wrapper does not commit you to joint training.
 
 ## Reference paths (most-used during this work)
 

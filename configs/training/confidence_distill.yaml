@@ -8,7 +8,7 @@ opt:
   warmup_steps: 500
   min_lr: 5.0e-6
 loss:
-  ce_weight: 0.7
+  ce_weight: 0.9
   smooth_l1_weight: 0.1
   label_smoothing: 0.05
 max_epochs: 50

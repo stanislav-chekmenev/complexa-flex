@@ -3543,3 +3543,154 @@ class AddPLDDTFromBFactor(BaseTransform):
         )
         if self.warn_once:
             AddPLDDTFromBFactor._warned = True
+
+
+def _expanded_residues_from_intervals(intervals: list[dict] | None) -> list[int]:
+    """Flatten ``[{lo, hi}, ...]`` 1-indexed inclusive spans to a residue list."""
+    if not intervals:
+        return []
+    out: list[int] = []
+    for span in intervals:
+        lo, hi = int(span["lo"]), int(span["hi"])
+        out.extend(range(lo, hi + 1))
+    return out
+
+
+def _teddymer_locator(data: Data) -> dict:
+    loc = getattr(data, "teddymer_locator", None)
+    if loc is None:
+        raise ValueError(
+            "Teddymer transform expects `data.teddymer_locator` to be set by "
+            "the dataset class; no such attribute on Data."
+        )
+    return loc
+
+
+def _teddymer_tar_path(locator: dict, chain_locator: dict) -> Path:
+    return Path(locator["afdb_proteomes_root"]) / chain_locator["source_tar_relpath"]
+
+
+class AddPLDDTFromParentAFDB(BaseTransform):
+    """Reads parent monomer pLDDT from an AFDB ``confidence_v4.json.gz`` tar
+    member and writes the standard ``plddt_residue``/``plddt_bin``/
+    ``plddt_mask`` triple in the token order
+    ``[chain_A_residues, chain_B_residues]`` defined by
+    ``data.teddymer_locator``.
+
+    Residue numbers outside the parent sequence are emitted with
+    ``plddt_mask=False`` and zero-filled (never NaN). The mask follows the
+    existing ``AddPLDDTFromBFactor`` convention: ``True`` only where the
+    residue is in-bounds and the score is non-zero.
+    """
+
+    def __init__(
+        self,
+        bin_width: float = 2.0,
+        max_bins: int = 50,
+        scale_max: float = 100.0,
+    ):
+        self.bin_width = bin_width
+        self.max_bins = max_bins
+        self.scale_max = scale_max
+
+    def __call__(self, data: Data) -> Data:
+        from proteinfoundation.confidence.losses import plddt_to_bin
+        from proteinfoundation.datasets.teddymer.io import read_confidence_from_tar
+
+        locator = _teddymer_locator(data)
+        loc_a = locator["A"]
+        tar_path = _teddymer_tar_path(locator, loc_a)
+        scores = read_confidence_from_tar(
+            tar_path,
+            loc_a["conf_member_offset"],
+            loc_a["conf_member_size"],
+            bool(loc_a.get("conf_is_gz", True)),
+        )
+        scores_arr = np.asarray(scores, dtype=np.float32)
+        n_full = scores_arr.shape[0]
+
+        expanded = _expanded_residues_from_intervals(
+            locator.get("intervals_A")
+        ) + _expanded_residues_from_intervals(locator.get("intervals_B"))
+        L = len(expanded)
+
+        plddt_residue = torch.zeros(L, dtype=torch.float32)
+        plddt_mask = torch.zeros(L, dtype=torch.bool)
+        for t, r in enumerate(expanded):
+            if 1 <= r <= n_full:
+                v = float(scores_arr[r - 1])
+                plddt_residue[t] = v
+                plddt_mask[t] = v > 0.0
+
+        plddt_residue = plddt_residue.clamp(0.0, self.scale_max)
+        data.plddt_residue = plddt_residue
+        data.plddt_bin = plddt_to_bin(plddt_residue, bin_width=self.bin_width, num_bins=self.max_bins)
+        data.plddt_mask = plddt_mask
+        return data
+
+
+class AddPAEFromParentAFDB(BaseTransform):
+    """Reads parent monomer PAE from an AFDB ``predicted_aligned_error_v4.json.gz``
+    tar member and writes the directional ``pae_residue_pair`` plus the
+    binned and masked twins.
+
+    No symmetrisation: ``pae_residue_pair[i, j] != pae_residue_pair[j, i]``
+    in general (AF2 PAE is the error of residue ``j`` aligned on the frame
+    of residue ``i``).
+
+    Residue pairs whose endpoints fall outside the parent sequence are
+    emitted with ``pae_mask=False`` and zero-filled. The asymmetric PAE
+    head reconstructs the inter-chain block from ``pae_residue_pair`` and
+    ``chain_id`` at consumption time.
+    """
+
+    def __init__(
+        self,
+        bin_width: float = 0.5,
+        max_bins: int = 64,
+        scale_max: float = 31.75,
+    ):
+        self.bin_width = bin_width
+        self.max_bins = max_bins
+        self.scale_max = scale_max
+
+    def __call__(self, data: Data) -> Data:
+        from proteinfoundation.confidence.losses import pae_to_bin
+        from proteinfoundation.datasets.teddymer.io import read_pae_from_tar
+
+        locator = _teddymer_locator(data)
+        loc_a = locator["A"]
+        tar_path = _teddymer_tar_path(locator, loc_a)
+        pae_full = read_pae_from_tar(
+            tar_path,
+            loc_a["pae_member_offset"],
+            loc_a["pae_member_size"],
+            bool(loc_a.get("pae_is_gz", True)),
+        )
+        n_full = pae_full.shape[0]
+
+        residues_a = _expanded_residues_from_intervals(locator.get("intervals_A"))
+        residues_b = _expanded_residues_from_intervals(locator.get("intervals_B"))
+        expanded = residues_a + residues_b
+
+        in_bounds = np.array(
+            [1 <= r <= n_full for r in expanded], dtype=bool
+        )
+        idx = np.array(
+            [(r - 1) if 1 <= r <= n_full else 0 for r in expanded],
+            dtype=np.int64,
+        )
+        pae_block_int = pae_full[np.ix_(idx, idx)]
+        pae_block = pae_block_int.astype(np.float32, copy=False)
+        valid = in_bounds[:, None] & in_bounds[None, :]
+        pae_block = np.where(valid, pae_block, 0.0).astype(np.float32, copy=False)
+        pae_block = np.clip(pae_block, 0.0, self.scale_max)
+
+        pae_residue_pair = torch.from_numpy(pae_block).to(torch.float32)
+        pae_mask = torch.from_numpy(valid).to(torch.bool)
+        pae_bin = pae_to_bin(pae_residue_pair, bin_width=self.bin_width, num_bins=self.max_bins)
+
+        data.pae_residue_pair = pae_residue_pair
+        data.pae_bin = pae_bin
+        data.pae_mask = pae_mask
+        return data
