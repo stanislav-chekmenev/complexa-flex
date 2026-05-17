@@ -3,7 +3,8 @@
 The trunk consumes upstream `(s, z, mask, cond)` from a frozen
 `LocalLatentsTransformer` (via `expose_intermediates`) and refines them with
 N x `MultiheadAttnAndTransition` + `PairReprUpdate` blocks. Outputs are
-mask-zeroed; `z` is symmetrised; both are LayerNormed.
+mask-zeroed and LayerNormed; `z` is passed through directionally so
+asymmetric heads (e.g. PaeHead) see un-projected pair features.
 """
 
 from __future__ import annotations
@@ -67,11 +68,11 @@ def test_mask_zeroes_padded_positions() -> None:
     assert torch.all(z_out[0, :, 8:, :] == 0.0)
 
 
-def test_z_is_symmetric_after_forward() -> None:
+def test_z_is_not_symmetrised_by_trunk() -> None:
     trunk = _make_trunk()
     s, z, mask, cond = _make_inputs()
     _, z_out = trunk(s, z, mask, cond)
-    assert torch.allclose(z_out, z_out.transpose(-3, -2), atol=1e-5)
+    assert not torch.allclose(z_out, z_out.transpose(-3, -2), atol=1e-3)
 
 
 def test_s_layernorm_output_sanity() -> None:

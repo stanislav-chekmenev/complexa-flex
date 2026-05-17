@@ -74,6 +74,14 @@ def _make_head() -> PLDDTHead:
     )
 
 
+def test_ce_weight_default_is_0_9() -> None:
+    mod = ConfidenceDistillationModule.from_components(
+        head=_make_head(),
+        proteina=_StubProteina(),
+    )
+    assert mod.ce_weight == 0.9
+
+
 def test_smooth_l1_weight_default_is_0_1() -> None:
     mod = ConfidenceDistillationModule.from_components(
         head=_make_head(),

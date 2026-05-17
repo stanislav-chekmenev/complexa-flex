@@ -6,7 +6,8 @@
   `trunk_ckpt_path` + `autoencoder_ckpt_path`, with
   `proteina.nn.expose_intermediates = True`, every parameter
   `requires_grad_(False)`, and `.eval()`),
-- a trainable `BaseConfidenceHead` (the PR-3 head).
+- a trainable `BaseConfidenceHead` (the PR-3 head; pLDDT today, PAE / multi
+  via PR-B).
 
 Forward path per batch (all pre-head steps under `torch.no_grad()`):
 
@@ -20,9 +21,11 @@ Forward path per batch (all pre-head steps under `torch.no_grad()`):
    orig_mask, n_orig}`.
 5. `_compute_cond(batch)` runs the trunk's `cond_factory` on the same
    `t`-pinned batch (still under no_grad), producing `[b, n, dim_cond]`.
-6. `head(s, z, mask, cond)` (trainable); logits sliced to
-   `orig_mask & batch['plddt_mask']`.
-7. `combined_plddt_loss` with `ce_weight / smooth_l1_weight`.
+6. `head(s, z, mask, cond)` (trainable); outputs trimmed to `n_orig`
+   along the residue axis.
+7. The head's own `compute_loss_and_metrics(out, batch_trimmed, mask_eff,
+   stage)` returns `(total, log_dict)`; the module prefixes the log keys
+   with `{train,val}/{head.output_name_root}/`.
 
 Frozen-trunk caveat: Lightning calls `model.train()` at the start of every
 epoch. The defensive hooks `on_train_epoch_start` / `on_train_batch_start`
@@ -35,6 +38,7 @@ The full frozen trunk is currently persisted into the Lightning checkpoint
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Iterable
 
@@ -44,19 +48,8 @@ import torch
 from loguru import logger
 from torch import nn
 
-from proteinfoundation.confidence.losses import combined_plddt_loss, masked_plddt_cross_entropy
-from proteinfoundation.confidence.metrics import (
-    _labels_to_continuous,
-    _logits_to_continuous,
-    expected_calibration_error,
-    expected_calibration_error_adaptive,
-    pearson_r,
-    plddt_accuracy,
-    plddt_mae,
-    plddt_mae_stratified,
-    spearman_r,
-)
 from proteinfoundation.nn.confidence.base import BaseConfidenceHead
+from proteinfoundation.nn.confidence.multi_head import MultiHeadConfidence
 from proteinfoundation.utils.sample_utils import add_clean_samples
 
 
@@ -133,6 +126,19 @@ class ConfidenceDistillationModule(L.LightningModule):
         self.smooth_l1_weight = float(smooth_l1_weight)
         self.label_smoothing = float(label_smoothing)
         self.num_bins_ece_adaptive = int(num_bins_ece_adaptive)
+        if (
+            self.ce_weight != 0.9
+            or self.smooth_l1_weight != 0.1
+            or self.label_smoothing != 0.05
+        ):
+            warnings.warn(
+                "ce_weight/smooth_l1_weight/label_smoothing on "
+                "ConfidenceDistillationModule are no-op since PR-B Slice 1; "
+                "set head.{ce_weight,ev_weight,label_smoothing} via the Hydra "
+                "`confidence.head.loss` block instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.reliability_diagram_every_n_epochs = int(reliability_diagram_every_n_epochs)
         self.reliability_diagram_num_bins = int(reliability_diagram_num_bins)
         # intentionally not registered as buffers to avoid state_dict pollution
@@ -240,6 +246,24 @@ class ConfidenceDistillationModule(L.LightningModule):
         pad = cond.new_zeros((cond.shape[0], n_ext - n_orig, cond.shape[2]))
         return torch.cat([cond, pad], dim=1)
 
+    def _trim_batch(self, batch: dict, n_orig: int) -> dict[str, torch.Tensor]:
+        trimmed: dict = {}
+        for k, v in batch.items():
+            if not torch.is_tensor(v):
+                trimmed[k] = v
+                continue
+            if (
+                v.ndim >= 3
+                and v.shape[1] == v.shape[2]
+                and v.shape[1] >= n_orig
+            ):
+                trimmed[k] = v[:, :n_orig, :n_orig]
+            elif v.ndim >= 2 and v.shape[1] >= n_orig:
+                trimmed[k] = v[:, :n_orig]
+            else:
+                trimmed[k] = v
+        return trimmed
+
     def _forward(self, batch: dict) -> dict[str, torch.Tensor]:
         with torch.no_grad():
             batch = add_clean_samples(
@@ -283,93 +307,172 @@ class ConfidenceDistillationModule(L.LightningModule):
             f"cond axis-1 {cond.shape[1]} must match mask_ext axis-1 {mask_ext.shape[1]} after padding"
         )
 
-        head_out = self.head(s, z, mask_ext, cond)
-        logits = head_out["plddt_logits"][:, :n_orig, :]
+        head_out_raw = self.head(s, z, mask_ext, cond)
+        head_out = self._trim_head_output(head_out_raw, n_orig)
 
-        plddt_mask = batch["plddt_mask"]
-        if plddt_mask.dtype != torch.bool:
-            plddt_mask = plddt_mask.bool()
         if orig_mask.dtype != torch.bool:
             orig_mask = orig_mask.bool()
-        mask_eff = (orig_mask & plddt_mask).to(torch.float32)
 
-        labels_bin = batch["plddt_bin"][:, :n_orig]
-        labels_cont = batch["plddt_residue"][:, :n_orig]
+        batch_trimmed = self._trim_batch(batch, n_orig)
 
+        if isinstance(self.head, MultiHeadConfidence):
+            masks_by_head: dict[str, torch.Tensor] = {}
+            for name, child in self.head.children_heads.items():
+                child_root = child.output_name_root
+                masks_by_head[name] = self._build_mask_eff(
+                    batch_trimmed, orig_mask, f"{child_root}_mask"
+                )
+            return {
+                "head_out": head_out,
+                "masks_by_head": masks_by_head,
+                "batch_trimmed": batch_trimmed,
+            }
+
+        mask_field = f"{self.head.output_name_root}_mask"
+        mask_eff = self._build_mask_eff(batch_trimmed, orig_mask, mask_field)
         return {
-            "logits": logits,
+            "head_out": head_out,
             "mask_eff": mask_eff,
-            "labels_bin": labels_bin,
-            "labels_cont": labels_cont,
+            "batch_trimmed": batch_trimmed,
         }
+
+    def _build_mask_eff(
+        self,
+        batch_trimmed: dict[str, torch.Tensor],
+        orig_mask: torch.Tensor,
+        mask_field: str,
+    ) -> torch.Tensor:
+        label_mask = batch_trimmed[mask_field]
+        if label_mask.dtype != torch.bool:
+            label_mask = label_mask.bool()
+        if label_mask.ndim == orig_mask.ndim:
+            assert label_mask.shape[1] == orig_mask.shape[1], (
+                f"{mask_field} axis-1 ({label_mask.shape[1]}) must equal orig_mask "
+                f"axis-1 ({orig_mask.shape[1]}); the dataset should align the label "
+                f"mask with the binder/trunk residue frame before reaching the sidecar."
+            )
+            mask_eff_bool = orig_mask & label_mask
+        elif label_mask.ndim == orig_mask.ndim + 1:
+            assert (
+                label_mask.shape[1] == label_mask.shape[2] == orig_mask.shape[1]
+            ), (
+                f"{mask_field} is a pair mask with shape {tuple(label_mask.shape)} "
+                f"but orig_mask axis-1 is {orig_mask.shape[1]}; expected a square "
+                f"(B, L, L) aligned with the binder/trunk frame."
+            )
+            pair_orig = orig_mask[:, :, None] & orig_mask[:, None, :]
+            mask_eff_bool = pair_orig & label_mask
+        else:
+            raise ValueError(
+                f"{mask_field}.ndim={label_mask.ndim} not compatible with "
+                f"orig_mask.ndim={orig_mask.ndim}"
+            )
+        return mask_eff_bool.to(torch.float32)
+
+    def _trim_head_output(
+        self, head_out: dict, n_orig: int
+    ) -> dict:
+        trimmed: dict = {}
+        for k, v in head_out.items():
+            if isinstance(v, dict):
+                trimmed[k] = self._trim_head_output(v, n_orig)
+                continue
+            if not torch.is_tensor(v):
+                trimmed[k] = v
+                continue
+            if v.ndim >= 3 and v.shape[1] == v.shape[2]:
+                trimmed[k] = v[:, :n_orig, :n_orig]
+            elif v.ndim >= 2:
+                trimmed[k] = v[:, :n_orig]
+            else:
+                trimmed[k] = v
+        return trimmed
+
+    def _log_head_metrics(
+        self,
+        stage: str,
+        log_dict: dict[str, torch.Tensor],
+        batch_size: int,
+    ) -> None:
+        prefix = f"{stage}/{self.head.output_name_root}"
+        on_step = stage == "train"
+        for key, value in log_dict.items():
+            prog_bar = key in ("loss", "plddt_accuracy", "total") and stage in (
+                "train",
+                "val",
+            )
+            self.log(
+                f"{prefix}/{key}",
+                value,
+                on_step=on_step,
+                on_epoch=True,
+                prog_bar=prog_bar,
+                batch_size=batch_size,
+                sync_dist=True,
+            )
+
+    def _first_logits_tensor(self, head_out: dict) -> torch.Tensor:
+        for v in head_out.values():
+            if torch.is_tensor(v):
+                return v
+            if isinstance(v, dict):
+                for inner in v.values():
+                    if torch.is_tensor(inner):
+                        return inner
+        raise RuntimeError("could not locate any logits tensor in head_out")
 
     def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
         out = self._forward(batch)
-        total, parts = combined_plddt_loss(
-            student_logits=out["logits"],
-            plddt_bin_labels=out["labels_bin"],
-            plddt_continuous=out["labels_cont"],
-            mask=out["mask_eff"],
-            bin_centers=self.head.bin_centers,
-            ce_weight=self.ce_weight,
-            smooth_l1_weight=self.smooth_l1_weight,
-            label_smoothing=self.label_smoothing,
-        )
-        b = out["logits"].shape[0]
-        self.log("train/loss", total, on_step=True, on_epoch=True, prog_bar=True, batch_size=b, sync_dist=True)
-        self.log("train/loss_ce", parts["loss_ce"], on_step=True, on_epoch=True, batch_size=b, sync_dist=True)
-        self.log("train/loss_smooth_l1", parts["loss_smooth_l1"], on_step=True, on_epoch=True, batch_size=b, sync_dist=True)
+        if isinstance(self.head, MultiHeadConfidence):
+            total, log_dict = self.head.compute_multi_loss_and_metrics(
+                out["head_out"],
+                out["batch_trimmed"],
+                out["masks_by_head"],
+                stage="train",
+            )
+            log_dict = dict(log_dict)
+            log_dict["total"] = total
+        else:
+            total, log_dict = self.head.compute_loss_and_metrics(
+                out["head_out"], out["batch_trimmed"], out["mask_eff"], stage="train"
+            )
+        first_tensor = self._first_logits_tensor(out["head_out"])
+        b = first_tensor.shape[0]
+        self._log_head_metrics("train", log_dict, b)
         return total
 
     def validation_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
         out = self._forward(batch)
-        logits = out["logits"]
-        mask_eff = out["mask_eff"]
-        labels_bin = out["labels_bin"]
-        labels_cont = out["labels_cont"]
-        centers = self.head.bin_centers
+        if isinstance(self.head, MultiHeadConfidence):
+            total, log_dict = self.head.compute_multi_loss_and_metrics(
+                out["head_out"],
+                out["batch_trimmed"],
+                out["masks_by_head"],
+                stage="val",
+            )
+            log_dict = dict(log_dict)
+            log_dict["total"] = total
+        else:
+            total, log_dict = self.head.compute_loss_and_metrics(
+                out["head_out"], out["batch_trimmed"], out["mask_eff"], stage="val"
+            )
+        first_tensor = self._first_logits_tensor(out["head_out"])
+        b = first_tensor.shape[0]
+        self._log_head_metrics("val", log_dict, b)
 
-        total, parts = combined_plddt_loss(
-            student_logits=logits,
-            plddt_bin_labels=labels_bin,
-            plddt_continuous=labels_cont,
-            mask=mask_eff,
-            bin_centers=centers,
-            ce_weight=self.ce_weight,
-            smooth_l1_weight=self.smooth_l1_weight,
-            label_smoothing=0.0,
-        )
-        loss_ce = parts["loss_ce"]
-        loss_smooth_l1 = parts["loss_smooth_l1"]
-
-        acc = plddt_accuracy(logits, labels_bin, mask_eff)
-        mae = plddt_mae(logits, labels_bin, mask_eff, centers)
-        pred_cont = _logits_to_continuous(logits, centers)
-        target_cont = _labels_to_continuous(labels_bin, centers)
-        pr = pearson_r(pred_cont, target_cont, mask_eff)
-        sr = spearman_r(pred_cont, target_cont, mask_eff)
-        strat = plddt_mae_stratified(logits, labels_bin, mask_eff, centers)
-        ece = expected_calibration_error(logits, labels_bin, mask_eff)
-        ece_adaptive = expected_calibration_error_adaptive(
-            logits, labels_bin, mask_eff, num_bins_ece=self.num_bins_ece_adaptive
-        )
-
-        b = logits.shape[0]
-        self.log("val/loss", loss_ce, prog_bar=True, batch_size=b, sync_dist=True)
-        self.log("val/loss_ce", loss_ce, batch_size=b, sync_dist=True)
-        self.log("val/loss_smooth_l1", loss_smooth_l1, batch_size=b, sync_dist=True)
-        self.log("val/loss_total", total, batch_size=b, sync_dist=True)
-        self.log("val/ece", ece, batch_size=b, sync_dist=True)
-        self.log("val/ece_adaptive", ece_adaptive, batch_size=b, sync_dist=True)
-        self.log("val/plddt_accuracy", acc, prog_bar=True, batch_size=b, sync_dist=True)
-        self.log("val/plddt_mae", mae, batch_size=b, sync_dist=True)
-        self.log("val/pearson_r", pr, batch_size=b, sync_dist=True)
-        self.log("val/spearman_r", sr, batch_size=b, sync_dist=True)
-        for k, v in strat.items():
-            self.log(f"val/{k}", v, batch_size=b, sync_dist=True)
-
-        self._accumulate_reliability(logits.detach(), labels_bin.detach(), mask_eff.detach())
-        return loss_ce
+        if not isinstance(self.head, MultiHeadConfidence):
+            diag_key = getattr(self.head, "reliability_diagram_logits_key", None)
+            if diag_key is not None and diag_key in out["head_out"]:
+                labels_bin = out["batch_trimmed"].get(
+                    f"{self.head.output_name_root}_bin"
+                )
+                if labels_bin is not None:
+                    self._accumulate_reliability(
+                        out["head_out"][diag_key].detach(),
+                        labels_bin.detach(),
+                        out["mask_eff"].detach(),
+                    )
+        return total
 
     def configure_optimizers(self):
         trainable = [p for p in self.head.parameters() if p.requires_grad]

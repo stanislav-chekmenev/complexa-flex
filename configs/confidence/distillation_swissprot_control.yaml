@@ -20,13 +20,13 @@ trainer:
   check_val_every_n_epoch: 1
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
-      monitor: "val/loss_ce"
+      monitor: "val/plddt/loss_ce"
       mode: "min"
       save_top_k: 3
-      filename: "ce-{epoch:03d}-{val/loss_ce:.4f}"
+      filename: "ce-{epoch:03d}-{val/plddt/loss_ce:.4f}"
       auto_insert_metric_name: false
     - _target_: lightning.pytorch.callbacks.EarlyStopping
-      monitor: "val/loss_ce"
+      monitor: "val/plddt/loss_ce"
       mode: "min"
       patience: 10
 

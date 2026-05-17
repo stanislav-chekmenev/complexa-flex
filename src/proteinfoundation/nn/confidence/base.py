@@ -7,18 +7,22 @@ every concrete confidence head (pLDDT today; ipTM / ipAE / ipLDDT later).
 
 `BaseConfidenceHead` is the abstract surface every head shares: it owns the
 trunk, delegates prediction-head MLPs to subclasses via `_predict`, and
-reserves `compute_loss` for PR-4.
+exposes `compute_loss_and_metrics` so the sidecar Lightning module stays
+head-agnostic.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Literal
 
 import torch
 from torch import nn
 
 from proteinfoundation.nn.modules.attn_n_transition import MultiheadAttnAndTransition
 from proteinfoundation.nn.modules.pair_update import PairReprUpdate
+
+StageLiteral = Literal["train", "val", "test", "predict"]
 
 
 class ConfidenceTrunk(nn.Module):
@@ -28,7 +32,9 @@ class ConfidenceTrunk(nn.Module):
     `n_blocks - 1` `PairReprUpdate` layers (gated by
     `update_pair_repr_every_n` so block `i` runs a pair update when
     `i % update_pair_repr_every_n == 0`). Final `LayerNorm` is applied to
-    both `s` and `z`; `z` is symmetrised; both outputs are mask-zeroed.
+    both `s` and `z`; both outputs are mask-zeroed. `z` is passed through
+    directionally; symmetric heads (PDE, ipLDDT, ipTM) opt in by
+    symmetrising inside their own `_predict`.
 
     `cond` is **mandatory** (no `Optional`). `MultiheadAttnAndTransition`
     calls AdaLN, which has no fallback path when `cond` is missing.
@@ -111,8 +117,9 @@ class ConfidenceTrunk(nn.Module):
             cond: `[b, n, dim_cond]` AdaLN conditioning. Mandatory.
 
         Returns:
-            `(s_refined, z_refined)`. Both mask-zeroed; `z_refined`
-            symmetrised; both LayerNormed.
+            `(s_refined, z_refined)`. Both mask-zeroed and LayerNormed;
+            `z_refined` is passed through directionally so asymmetric
+            heads (PaeHead) see un-projected pair features.
         """
         mask_f = mask[..., None]
         s = s * mask_f
@@ -126,8 +133,6 @@ class ConfidenceTrunk(nn.Module):
 
         s = self.s_layer_norm(s) * mask_f
         z = self.z_layer_norm(z) * pair_mask
-        z = (z + z.transpose(-3, -2)) / 2.0
-        z = z * pair_mask
 
         return s, z
 
@@ -135,11 +140,14 @@ class ConfidenceTrunk(nn.Module):
 class BaseConfidenceHead(nn.Module, ABC):
     """Abstract base for confidence heads.
 
-    Subclasses override `_predict` to produce their head-specific outputs.
-    `compute_loss` is reserved for PR-4.
+    Subclasses override `_predict` to produce their head-specific outputs
+    and `compute_loss_and_metrics` to produce the per-step `(loss, log_dict)`
+    the sidecar Lightning module consumes head-agnostically.
     """
 
     output_keys: tuple[str, ...] = ()
+    output_name_root: str = ""
+    expected_trunk_eval_t: float = 0.99
 
     def __init__(
         self,
@@ -191,10 +199,28 @@ class BaseConfidenceHead(nn.Module, ABC):
         s_ref, z_ref = self.trunk(s, z, mask, cond)
         return self._predict(s_ref, z_ref, mask)
 
-    def compute_loss(
+    def compute_loss_and_metrics(
         self,
-        predictions: dict[str, torch.Tensor],
+        out: dict[str, torch.Tensor],
         batch: dict[str, torch.Tensor],
-        mask: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        raise NotImplementedError("compute_loss is implemented in PR-4")
+        mask_eff: torch.Tensor,
+        *,
+        stage: StageLiteral = "train",
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return `(total_loss, log_dict)` for one optimisation step.
+
+        Args:
+            out: head's forward return (e.g. `{"plddt_logits": ...}`).
+            batch: trimmed-to-`n_orig` batch with the fields this head needs.
+            mask_eff: already-AND-ed effective mask (`orig_mask & *_mask`),
+                float dtype.
+            stage: `"train"` or `"val"`. Heads may branch behaviour
+                (e.g. drop `label_smoothing` and emit validation metrics
+                during `"val"`).
+
+        Returns:
+            `(total, log_dict)`. The log dict keys are unprefixed; the
+            sidecar prepends `train/{output_name_root}/` or
+            `val/{output_name_root}/`.
+        """
+        raise NotImplementedError
