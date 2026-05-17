@@ -8,13 +8,13 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=3-00:00:00
-#SBATCH --output=logs/confdistill_%j.out
-#SBATCH --error=logs/confdistill_%j.err
+#SBATCH --output=logs/rewarddistill_%j.out
+#SBATCH --error=logs/rewarddistill_%j.err
 
 set -euo pipefail
 
 echo "==========================================="
-echo "Confidence-head distillation started: $(date)"
+echo "Reward-head distillation started: $(date)"
 echo "Running on: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "GPU devices: ${CUDA_VISIBLE_DEVICES:-unset}"
@@ -131,7 +131,7 @@ export NCCL_ASYNC_ERROR_HANDLING=1
 cd "$PROJECT_ROOT"
 
 # --- Run training ---
-echo "Starting confidence-head distillation..."
+echo "Starting reward-head distillation..."
 srun --kill-on-bad-exit uv run python -m proteinfoundation.confidence.train_confidence \
     --config-name=confidence/distillation_swissprot \
     trainer.devices=$NUM_DEVICES \
