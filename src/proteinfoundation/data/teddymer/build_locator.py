@@ -51,21 +51,42 @@ def _load_needed_inventory_rows(
     return df.drop_duplicates(subset=["afdb_id"], keep="first").reset_index(drop=True)
 
 
-def build_locator_rows(dimers: pd.DataFrame, inventory_dir: Path) -> pd.DataFrame:
+def build_locator_rows(
+    dimers: pd.DataFrame,
+    inventory_dir: Path,
+    on_missing: str = "raise",
+) -> pd.DataFrame:
     """Build the ``locator_rows.parquet`` DataFrame from ``dimers`` and the
     AFDB master inventory at ``inventory_dir``.
+
+    Args:
+        dimers: DataFrame with ``dimer_id``, ``dimer_index``, ``parent_afdb_id``.
+        inventory_dir: directory of ``w0_b*.parquet`` AFDB master-inventory
+            batches.
+        on_missing: how to handle parent AFDB ids not found in the inventory:
+            ``"raise"`` (default) raises ``ValueError``;
+            ``"drop"`` silently drops the corresponding dimers and proceeds.
+            The local AFDB v4 mirror's inventory only covers ~12% of AFDB v4,
+            so ``"drop"`` is the operational mode for the build script while
+            tests use ``"raise"`` to lock in the failure semantics.
     """
+    if on_missing not in {"raise", "drop"}:
+        raise ValueError(f"on_missing must be 'raise' or 'drop', got {on_missing!r}")
+
     needed = set(dimers["parent_afdb_id"].astype(str).unique())
     inv = _load_needed_inventory_rows(Path(inventory_dir), needed)
 
     found = set(inv["afdb_id"].astype(str))
     missing = needed - found
-    if missing:
+    if missing and on_missing == "raise":
         sample = sorted(missing)[:5]
         raise ValueError(
             f"{len(missing)} parent_afdb_id values missing from AFDB inventory. "
             f"Examples: {sample}"
         )
+
+    if missing and on_missing == "drop":
+        dimers = dimers[~dimers["parent_afdb_id"].isin(missing)].reset_index(drop=True)
 
     # Two-chain expansion: cross dimers x {A, B}, then join to inventory.
     chains = pd.DataFrame({"chain_id": ["A", "B"]})

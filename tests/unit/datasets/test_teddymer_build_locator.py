@@ -109,6 +109,46 @@ def test_build_locator_rows_raises_on_missing_afdb_id(tmp_path):
         build_locator_rows(dimers, inv_dir)
 
 
+def test_build_locator_rows_on_missing_drop_silently_drops(tmp_path):
+    """In operational mode the AFDB inventory only covers ~12% of AFDB v4, so the
+    builder must support dropping dimers whose parent is not in the inventory.
+    """
+    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+
+    inv_dir = tmp_path / "inv"
+    inv_dir.mkdir()
+    _write_fake_inventory_batch(inv_dir, ["AF-A0A005-F1"], idx=0)
+
+    dimers = pd.DataFrame(
+        {
+            "dimer_id": ["7DI_AF-A0A005-F1-model_v4", "999DI_AF-MISSING-F1-model_v4"],
+            "dimer_index": [7, 999],
+            "parent_afdb_id": ["AF-A0A005-F1", "AF-MISSING-F1"],
+        }
+    )
+    locator = build_locator_rows(dimers, inv_dir, on_missing="drop")
+    # Only the dimer with the in-inventory parent survives → 2 chain rows.
+    assert len(locator) == 2
+    assert set(locator["dimer_index"].unique()) == {7}
+
+
+def test_build_locator_rows_invalid_on_missing_raises(tmp_path):
+    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+
+    inv_dir = tmp_path / "inv"
+    inv_dir.mkdir()
+    _write_fake_inventory_batch(inv_dir, ["AF-A0A005-F1"], idx=0)
+    dimers = pd.DataFrame(
+        {
+            "dimer_id": ["7DI_AF-A0A005-F1-model_v4"],
+            "dimer_index": [7],
+            "parent_afdb_id": ["AF-A0A005-F1"],
+        }
+    )
+    with pytest.raises(ValueError, match="on_missing"):
+        build_locator_rows(dimers, inv_dir, on_missing="bogus")
+
+
 def test_build_locator_rows_dedups_duplicate_inventory_rows(tmp_path):
     """If an afdb_id appears in two batches (shouldn't happen but defensive),
     we keep the first occurrence so the row count remains 2 x N_dimers.
