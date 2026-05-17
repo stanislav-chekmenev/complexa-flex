@@ -351,7 +351,7 @@ sbatch scripts/train_confidence_swissprot.sbatch
 
 ### Loss + metrics
 
-- `train/loss = 0.7 * masked_CE + 0.1 * SmoothL1(EV)`. Masked reduction `sum(loss * mask) / mask.sum().clamp_min(1)`.
+- `train/loss = 0.9 * masked_CE + 0.1 * SmoothL1(EV)`. Masked reduction `sum(loss * mask) / mask.sum().clamp_min(1)`.
 - Validation logs: `val/loss_ce`, `val/loss_smooth_l1`, `val/loss_total`, `val/plddt_accuracy`, `val/plddt_mae`, `val/pearson_r`, `val/spearman_r`, `val/mae_lt50`, `val/mae_50_70`, `val/mae_70_90`, `val/mae_ge90`, `val/ece`, `val/ece_adaptive`.
 - Reliability diagram emitted on `on_validation_epoch_end` via `logger.log_table` if configured, else `.npy` fallback under `trainer.log_dir/reliability_epoch_<E>.npy` (rank-0 only).
 - Early-stop on `val/loss_ce` (mode `min`, patience 10). `ModelCheckpoint` saves top-3 by `val/loss_ce`.
