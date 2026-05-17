@@ -5,9 +5,9 @@
 **Goal:** Turn the staged Teddymer release at `/mnt/storage01/home/schekmenev/data/teddymer_v1/` into a parquet view co-located with the AFDB v4 inventory — `dimers.parquet` (one row per non-singleton cluster rep with TED domain residue intervals, CATH ids, AvgIntPAE/Plddt, per-chain IntPlddt, and a `complexa_filter` boolean) plus `locator_rows.parquet` (two AFDB tar-byte-offset rows per dimer) — and validate the join with a 50-dimer sanity check pytest.
 
 **Architecture:**
-- New package `proteinfoundation.data.teddymer/` (parser, joiner, builder modules). Pure preprocessing, no Lightning/torch.
+- New package `proteinfoundation.datasets.teddymer/` (parser, joiner, builder modules). Pure preprocessing, no Lightning/torch.
 - Three substantial commits, each with TDD-driven tests + implementation: (1) `_h` + metadata → `dimers.parquet`, (2) `dimers.parquet` + AFDB master inventory → `locator_rows.parquet`, (3) 50-dimer sanity check + `complexa_filter` column.
-- One sbatch orchestrator at `scripts/preprocess_teddymer.sbatch` calling a single Python entry point `python -m proteinfoundation.data.teddymer.build_view` that runs all three steps in sequence under a CLI.
+- One sbatch orchestrator at `scripts/preprocess_teddymer.sbatch` calling a single Python entry point `python -m proteinfoundation.datasets.teddymer.build_view` that runs all three steps in sequence under a CLI.
 
 **Tech Stack:** Python 3.12, pyarrow, polars (for the AFDB-inventory streaming join), tarfile + gzip stdlib for AFDB member extraction, pytest, hydra-free (these are scripts, not training entries).
 
@@ -18,12 +18,12 @@
 | Path | Responsibility |
 | --- | --- |
 | `src/proteinfoundation/data/__init__.py` | Empty package marker (if not already present). |
-| `src/proteinfoundation/data/teddymer/__init__.py` | Empty package marker. |
-| `src/proteinfoundation/data/teddymer/parse_repdb_h.py` | Parse MMseqs2-format `teddymer_repdb_h` headers + metadata TSV into a `dimers.parquet` DataFrame. |
-| `src/proteinfoundation/data/teddymer/build_locator.py` | Join `dimers.parquet` parent AFDB IDs against AFDB master inventory parquet batches → `locator_rows.parquet`. |
-| `src/proteinfoundation/data/teddymer/sanity_check.py` | Pull parent CIF/conf for a sample of dimers and recompute `AvgIntPlddt` from per-chain `IntPlddt` substrings vs metadata. Pure-function helpers used by both the pytest sanity-check and the build script. |
-| `src/proteinfoundation/data/teddymer/build_view.py` | CLI entry point chaining `parse_repdb_h → build_locator → sanity_check → complexa_filter` with argparse. |
-| `scripts/preprocess_teddymer.sbatch` | SLURM job launching `python -m proteinfoundation.data.teddymer.build_view` with the right paths. |
+| `src/proteinfoundation/datasets/teddymer/__init__.py` | Empty package marker. |
+| `src/proteinfoundation/datasets/teddymer/parse_repdb_h.py` | Parse MMseqs2-format `teddymer_repdb_h` headers + metadata TSV into a `dimers.parquet` DataFrame. |
+| `src/proteinfoundation/datasets/teddymer/build_locator.py` | Join `dimers.parquet` parent AFDB IDs against AFDB master inventory parquet batches → `locator_rows.parquet`. |
+| `src/proteinfoundation/datasets/teddymer/sanity_check.py` | Pull parent CIF/conf for a sample of dimers and recompute `AvgIntPlddt` from per-chain `IntPlddt` substrings vs metadata. Pure-function helpers used by both the pytest sanity-check and the build script. |
+| `src/proteinfoundation/datasets/teddymer/build_view.py` | CLI entry point chaining `parse_repdb_h → build_locator → sanity_check → complexa_filter` with argparse. |
+| `scripts/preprocess_teddymer.sbatch` | SLURM job launching `python -m proteinfoundation.datasets.teddymer.build_view` with the right paths. |
 | `tests/unit/datasets/test_teddymer_parse_repdb_h.py` | Unit tests for header parsing, interval parsing, IntPlddt parsing, metadata join. |
 | `tests/unit/datasets/test_teddymer_build_locator.py` | Unit tests for AFDB-inventory join correctness (missing IDs, dedup, per-chain expansion). |
 | `tests/integration/test_teddymer_sanity_check.py` | The 50-dimer sanity check (steps 4) — pulls real AFDB tar bytes for 50 random dimers from the staged data and verifies `AvgIntPlddt` recomputed from confidence JSON matches metadata to within ε. |
@@ -110,15 +110,15 @@ chain_id     str    # "A" or "B"
 
 **Files:**
 - Create: `src/proteinfoundation/data/__init__.py` (empty)
-- Create: `src/proteinfoundation/data/teddymer/__init__.py` (empty)
-- Create: `src/proteinfoundation/data/teddymer/parse_repdb_h.py`
+- Create: `src/proteinfoundation/datasets/teddymer/__init__.py` (empty)
+- Create: `src/proteinfoundation/datasets/teddymer/parse_repdb_h.py`
 - Create: `tests/unit/datasets/test_teddymer_parse_repdb_h.py`
 
 - [ ] **Step 1.1: Write failing test for header line parsing**
 
 ```python
 # tests/unit/datasets/test_teddymer_parse_repdb_h.py
-from proteinfoundation.data.teddymer.parse_repdb_h import parse_header_line, HeaderRecord
+from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_header_line, HeaderRecord
 
 
 def test_parse_header_line_continuous_domain():
@@ -152,7 +152,7 @@ def test_parse_header_line_rejects_malformed():
 - [ ] **Step 1.2: Run tests to verify they fail**
 
 Run: `source .venv/bin/activate && pytest tests/unit/datasets/test_teddymer_parse_repdb_h.py -v`
-Expected: FAIL — `ModuleNotFoundError: proteinfoundation.data.teddymer.parse_repdb_h`.
+Expected: FAIL — `ModuleNotFoundError: proteinfoundation.datasets.teddymer.parse_repdb_h`.
 
 - [ ] **Step 1.3: Create empty package markers**
 
@@ -161,13 +161,13 @@ Expected: FAIL — `ModuleNotFoundError: proteinfoundation.data.teddymer.parse_r
 ```
 
 ```python
-# src/proteinfoundation/data/teddymer/__init__.py
+# src/proteinfoundation/datasets/teddymer/__init__.py
 ```
 
 - [ ] **Step 1.4: Implement `parse_header_line` to pass the tests**
 
 ```python
-# src/proteinfoundation/data/teddymer/parse_repdb_h.py
+# src/proteinfoundation/datasets/teddymer/parse_repdb_h.py
 from __future__ import annotations
 
 import re
@@ -218,7 +218,7 @@ Expected: 3 passed.
 
 ```python
 def test_parse_int_plddt_two_chains():
-    from proteinfoundation.data.teddymer.parse_repdb_h import parse_int_plddt
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_int_plddt
     s = "5556776777777777756677889:99998998888888887888887765663343"
     a, b = parse_int_plddt(s)
     assert len(a) == 25
@@ -229,7 +229,7 @@ def test_parse_int_plddt_two_chains():
 
 def test_parse_int_plddt_rejects_more_than_two_chains():
     import pytest
-    from proteinfoundation.data.teddymer.parse_repdb_h import parse_int_plddt
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_int_plddt
     with pytest.raises(ValueError, match="exactly two"):
         parse_int_plddt("1:2:3")
 ```
@@ -254,7 +254,7 @@ Run: `pytest tests/unit/datasets/test_teddymer_parse_repdb_h.py -v` → 5 passed
 ```python
 def test_build_dimers_table_joins_h_and_metadata(tmp_path):
     """End-to-end: synthetic _h, _h.index, metadata.tsv -> dimers.parquet rows."""
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
     import polars as pl
 
     h_path = tmp_path / "teddymer_repdb_h"
@@ -314,7 +314,7 @@ def test_build_dimers_table_joins_h_and_metadata(tmp_path):
 def test_build_dimers_table_asserts_domain_pair_consistent(tmp_path):
     """If _h says TED01+TED02 but metadata says TED01:TED03, raise."""
     import pytest as _pytest
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
     h_path = tmp_path / "h"
     idx_path = tmp_path / "h.index"
     meta_path = tmp_path / "meta.tsv"
@@ -339,7 +339,7 @@ def test_build_dimers_table_asserts_domain_pair_consistent(tmp_path):
 def test_build_dimers_table_asserts_intra_monomer(tmp_path):
     """If the two _h rows for a dimer have different parent_afdb_id, raise."""
     import pytest as _pytest
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
     h_path = tmp_path / "h"
     idx_path = tmp_path / "h.index"
     meta_path = tmp_path / "meta.tsv"
@@ -478,7 +478,7 @@ git commit -m "add Teddymer _h+metadata parser producing dimers.parquet schema"
 ## Task 2: AFDB master inventory join → locator_rows.parquet
 
 **Files:**
-- Create: `src/proteinfoundation/data/teddymer/build_locator.py`
+- Create: `src/proteinfoundation/datasets/teddymer/build_locator.py`
 - Create: `tests/unit/datasets/test_teddymer_build_locator.py`
 
 - [ ] **Step 2.1: Write failing test for inventory join**
@@ -529,7 +529,7 @@ def _fake_inventory_batch(tmp_path: Path, afdb_ids: list[str]) -> Path:
 
 
 def test_build_locator_rows_two_chains_per_dimer(tmp_path):
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -550,7 +550,7 @@ def test_build_locator_rows_two_chains_per_dimer(tmp_path):
 
 
 def test_build_locator_rows_raises_on_missing_afdb_id(tmp_path):
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
     _fake_inventory_batch(inv_dir, ["AF-A0A005-F1"])
@@ -565,7 +565,7 @@ def test_build_locator_rows_raises_on_missing_afdb_id(tmp_path):
 
 def test_build_locator_rows_dedups_inventory_collisions(tmp_path):
     """If an afdb_id appears in two batches (shouldn't happen but defensive), take the first."""
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
     _fake_inventory_batch(inv_dir, ["AF-A0A005-F1"])
@@ -584,7 +584,7 @@ Run: `pytest tests/unit/datasets/test_teddymer_build_locator.py -v` → fail.
 - [ ] **Step 2.3: Implement `build_locator_rows`**
 
 ```python
-# src/proteinfoundation/data/teddymer/build_locator.py
+# src/proteinfoundation/datasets/teddymer/build_locator.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -648,7 +648,7 @@ Run: `pytest tests/unit/datasets/test_teddymer_build_locator.py -v` → 3 passed
 - [ ] **Step 2.5: Commit**
 
 ```bash
-git add src/proteinfoundation/data/teddymer/build_locator.py tests/unit/datasets/test_teddymer_build_locator.py
+git add src/proteinfoundation/datasets/teddymer/build_locator.py tests/unit/datasets/test_teddymer_build_locator.py
 git commit -m "join Teddymer dimers against AFDB inventory to emit locator_rows.parquet"
 ```
 
@@ -657,10 +657,10 @@ git commit -m "join Teddymer dimers against AFDB inventory to emit locator_rows.
 ## Task 3: Sanity-check helpers + 50-dimer integration pytest + complexa_filter
 
 **Files:**
-- Create: `src/proteinfoundation/data/teddymer/sanity_check.py`
+- Create: `src/proteinfoundation/datasets/teddymer/sanity_check.py`
 - Create: `tests/integration/test_teddymer_sanity_check.py`
 - Create: `tests/unit/datasets/test_teddymer_complexa_filter.py`
-- Modify: `src/proteinfoundation/data/teddymer/parse_repdb_h.py` (add `complexa_filter` column via `add_complexa_filter()`)
+- Modify: `src/proteinfoundation/datasets/teddymer/parse_repdb_h.py` (add `complexa_filter` column via `add_complexa_filter()`)
 
 - [ ] **Step 3.1: Write failing test for `add_complexa_filter`**
 
@@ -668,7 +668,7 @@ git commit -m "join Teddymer dimers against AFDB inventory to emit locator_rows.
 # tests/unit/datasets/test_teddymer_complexa_filter.py
 import polars as pl
 
-from proteinfoundation.data.teddymer.parse_repdb_h import add_complexa_filter
+from proteinfoundation.datasets.teddymer.parse_repdb_h import add_complexa_filter
 
 
 def test_complexa_filter_thresholds():
@@ -742,7 +742,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def dimers_df() -> pl.DataFrame:
     """Build dimers table over the *entire* staged release, then sample 50."""
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
     df = build_dimers_table(
         TEDDYMER_STAGING / "_raw" / "teddymer_repdb" / "teddymer_repdb_h",
         TEDDYMER_STAGING / "_raw" / "teddymer_repdb" / "teddymer_repdb_h.index",
@@ -753,7 +753,7 @@ def dimers_df() -> pl.DataFrame:
 
 @pytest.fixture(scope="module")
 def locator_df(dimers_df) -> pl.DataFrame:
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
     return build_locator_rows(dimers_df, AFDB_INVENTORY)
 
 
@@ -841,8 +841,8 @@ Expected: 1 passed. If it fails on residue-range checks, that is exactly the sig
 - [ ] **Step 3.7: Commit**
 
 ```bash
-git add src/proteinfoundation/data/teddymer/parse_repdb_h.py \
-        src/proteinfoundation/data/teddymer/sanity_check.py \
+git add src/proteinfoundation/datasets/teddymer/parse_repdb_h.py \
+        src/proteinfoundation/datasets/teddymer/sanity_check.py \
         tests/unit/datasets/test_teddymer_complexa_filter.py \
         tests/integration/test_teddymer_sanity_check.py
 git commit -m "add complexa_filter column + 50-dimer AFDB-join sanity check pytest"
@@ -853,18 +853,18 @@ git commit -m "add complexa_filter column + 50-dimer AFDB-join sanity check pyte
 ## Task 4: CLI entry-point `build_view.py` + sbatch orchestrator
 
 **Files:**
-- Create: `src/proteinfoundation/data/teddymer/build_view.py`
+- Create: `src/proteinfoundation/datasets/teddymer/build_view.py`
 - Create: `scripts/preprocess_teddymer.sbatch`
 
 - [ ] **Step 4.1: Implement the CLI entry point**
 
 ```python
-# src/proteinfoundation/data/teddymer/build_view.py
+# src/proteinfoundation/datasets/teddymer/build_view.py
 """End-to-end Teddymer view build: dimers.parquet + locator_rows.parquet, with
 optional `complexa_filter` column and a sampled AFDB sanity check.
 
 Usage:
-    python -m proteinfoundation.data.teddymer.build_view \
+    python -m proteinfoundation.datasets.teddymer.build_view \
         --staging   /mnt/.../teddymer_v1/_raw \
         --inventory /mnt/.../afdb_v4_bulk/inventory_first/inventory/manifests/batches \
         --out       /mnt/.../teddymer_v1 \
@@ -878,8 +878,8 @@ from pathlib import Path
 
 import polars as pl
 
-from proteinfoundation.data.teddymer.build_locator import build_locator_rows
-from proteinfoundation.data.teddymer.parse_repdb_h import add_complexa_filter, build_dimers_table
+from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
+from proteinfoundation.datasets.teddymer.parse_repdb_h import add_complexa_filter, build_dimers_table
 
 logger = logging.getLogger(__name__)
 
@@ -929,7 +929,7 @@ def main() -> None:
     logger.info("wrote %s and %s", dimers_out, locator_out)
 
     if args.sanity_n > 0:
-        from proteinfoundation.data.teddymer.sanity_check import sanity_check_dimers
+        from proteinfoundation.datasets.teddymer.sanity_check import sanity_check_dimers
         n_failed = sanity_check_dimers(
             dimers.sample(n=args.sanity_n, seed=20260517),
             locator,
@@ -947,7 +947,7 @@ if __name__ == "__main__":
 - [ ] **Step 4.2: Implement `sanity_check.py` (extract the sanity-check loop from the test)**
 
 ```python
-# src/proteinfoundation/data/teddymer/sanity_check.py
+# src/proteinfoundation/datasets/teddymer/sanity_check.py
 from __future__ import annotations
 
 import gzip
@@ -1038,7 +1038,7 @@ echo "  out       = $OUT_DIR"
 echo "  sanity-n  = $SANITY_N"
 echo "==========================================="
 
-python -m proteinfoundation.data.teddymer.build_view \
+python -m proteinfoundation.datasets.teddymer.build_view \
     --staging "$STAGING" \
     --inventory "$INVENTORY" \
     --afdb-proteomes "$PROTEOMES" \
@@ -1060,7 +1060,7 @@ Expected: all pass.
 Run:
 ```bash
 source .venv/bin/activate
-python -m proteinfoundation.data.teddymer.build_view \
+python -m proteinfoundation.datasets.teddymer.build_view \
     --staging /mnt/storage01/home/schekmenev/data/teddymer_v1/_raw \
     --inventory /mnt/labs/shared/databases/afdb_v4_bulk/inventory_first/inventory/manifests/batches \
     --out      /mnt/storage01/home/schekmenev/data/teddymer_v1 \
@@ -1071,8 +1071,8 @@ Expected: produces `dimers.parquet` (~587k rows) + `locator_rows.parquet` (~1.17
 - [ ] **Step 4.6: Commit**
 
 ```bash
-git add src/proteinfoundation/data/teddymer/build_view.py \
-        src/proteinfoundation/data/teddymer/sanity_check.py \
+git add src/proteinfoundation/datasets/teddymer/build_view.py \
+        src/proteinfoundation/datasets/teddymer/sanity_check.py \
         scripts/preprocess_teddymer.sbatch
 git commit -m "add Teddymer preprocessing CLI + sbatch orchestrator"
 ```

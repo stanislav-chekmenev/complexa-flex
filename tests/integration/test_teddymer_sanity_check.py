@@ -40,7 +40,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def dimers_full():
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
 
     return build_dimers_table(
         TEDDYMER_STAGING / "_raw" / "teddymer_repdb" / "teddymer_repdb_h",
@@ -53,7 +53,7 @@ def dimers_full():
 def joined_locator(dimers_full):
     """Build the full locator, dropping dimers whose parent monomer is not in
     the local AFDB master inventory (it only covers ~12% of AFDB v4)."""
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     return build_locator_rows(dimers_full, AFDB_INVENTORY, on_missing="drop")
 
@@ -68,7 +68,7 @@ def dimers_sample(dimers_full, joined_locator):
 
 
 def test_50_dimers_round_trip_through_afdb(dimers_sample, joined_locator):
-    from proteinfoundation.data.teddymer.sanity_check import sanity_check_dimers
+    from proteinfoundation.datasets.teddymer.sanity_check import sanity_check_dimers
 
     locator_for_sample = joined_locator[
         joined_locator["dimer_index"].isin(dimers_sample["dimer_index"])

@@ -12,7 +12,7 @@ def test_recompute_avg_int_plddt_from_digits_matches_lower_bound():
     Teddymer's ``AvgIntPlddt`` is the mean of ``10*d`` across all interface residues
     (verified empirically against rows 0-7 of nonsingletonrep_metadata.tsv).
     """
-    from proteinfoundation.data.teddymer.sanity_check import recompute_avg_int_plddt
+    from proteinfoundation.datasets.teddymer.sanity_check import recompute_avg_int_plddt
 
     # Digits and expected value taken from row 0 (DimerIndex=655) of the real
     # nonsingletonrep_metadata.tsv: IntPlddt =
@@ -26,7 +26,7 @@ def test_recompute_avg_int_plddt_from_digits_matches_lower_bound():
 
 def test_recompute_avg_int_plddt_handles_empty():
     """Defensive: empty chains should not raise, just return 0.0."""
-    from proteinfoundation.data.teddymer.sanity_check import recompute_avg_int_plddt
+    from proteinfoundation.datasets.teddymer.sanity_check import recompute_avg_int_plddt
 
     assert recompute_avg_int_plddt([], []) == 0.0
 
@@ -38,7 +38,7 @@ def _gz_bytes(obj) -> bytes:
 def test_read_confidence_extracts_residue_scores(tmp_path):
     """``read_confidence_from_tar`` should return the per-residue confidence
     scores (which AFDB stores as floats 0-100) given a tar+offset+size."""
-    from proteinfoundation.data.teddymer.sanity_check import read_confidence_from_tar
+    from proteinfoundation.datasets.teddymer.sanity_check import read_confidence_from_tar
 
     # Build a tar-shaped file with one gzipped JSON member at a known offset.
     payload = {

@@ -8,7 +8,7 @@ def test_complexa_filter_three_thresholds():
     interface_length > 10, avg_int_plddt > 70, avg_int_pae < 10. Each row below
     pokes exactly one of those conditions across the boundary.
     """
-    from proteinfoundation.data.teddymer.parse_repdb_h import add_complexa_filter
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import add_complexa_filter
 
     df = pd.DataFrame(
         {
@@ -24,7 +24,7 @@ def test_complexa_filter_three_thresholds():
 
 def test_complexa_filter_preserves_other_columns():
     """add_complexa_filter must not drop or modify existing columns."""
-    from proteinfoundation.data.teddymer.parse_repdb_h import add_complexa_filter
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import add_complexa_filter
 
     df = pd.DataFrame(
         {

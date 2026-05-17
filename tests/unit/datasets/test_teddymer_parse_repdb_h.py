@@ -5,7 +5,7 @@ import pytest
 
 
 def test_parse_header_line_continuous_domain():
-    from proteinfoundation.data.teddymer.parse_repdb_h import HeaderRecord, parse_header_line
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import HeaderRecord, parse_header_line
 
     line = "7DI_AF-A0A005-F1-model_v4_TED01\tCATH3.40.50_RES7-190"
     rec = parse_header_line(line)
@@ -20,7 +20,7 @@ def test_parse_header_line_continuous_domain():
 
 
 def test_parse_header_line_discontinuous_domain():
-    from proteinfoundation.data.teddymer.parse_repdb_h import parse_header_line
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_header_line
 
     line = "34DI_AF-A0A009E3M2-F1-model_v4_TED02\tCATH3.40.50.2000_RES15-30_37-122_289-300"
     rec = parse_header_line(line)
@@ -31,14 +31,14 @@ def test_parse_header_line_discontinuous_domain():
 
 
 def test_parse_header_line_rejects_malformed():
-    from proteinfoundation.data.teddymer.parse_repdb_h import parse_header_line
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_header_line
 
     with pytest.raises(ValueError, match="header"):
         parse_header_line("not-a-valid-line")
 
 
 def test_parse_int_plddt_two_chains():
-    from proteinfoundation.data.teddymer.parse_repdb_h import parse_int_plddt
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_int_plddt
 
     s = "5556776777777777756677889:99998998888888887888887765663343"
     a, b = parse_int_plddt(s)
@@ -50,7 +50,7 @@ def test_parse_int_plddt_two_chains():
 
 
 def test_parse_int_plddt_rejects_more_than_two_chains():
-    from proteinfoundation.data.teddymer.parse_repdb_h import parse_int_plddt
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import parse_int_plddt
 
     with pytest.raises(ValueError, match="exactly two"):
         parse_int_plddt("1:2:3")
@@ -91,7 +91,7 @@ def _row_by_dimer_index(df: pd.DataFrame, dimer_index: int) -> dict:
 
 
 def test_build_dimers_table_joins_h_and_metadata(tmp_path):
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
 
     headers = [
         "7DI_AF-A0A005-F1-model_v4_TED01\tCATH3.40.50_RES7-190\n",
@@ -141,7 +141,7 @@ def test_build_dimers_table_joins_h_and_metadata(tmp_path):
 
 
 def test_build_dimers_table_skips_dimers_absent_from_metadata(tmp_path):
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
 
     headers = [
         "7DI_AF-A0A005-F1-model_v4_TED01\tCATH3.40.50_RES7-190\n",
@@ -160,7 +160,7 @@ def test_build_dimers_table_skips_dimers_absent_from_metadata(tmp_path):
 
 
 def test_build_dimers_table_asserts_domain_pair_consistent(tmp_path):
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
 
     headers = [
         "7DI_AF-A0A005-F1-model_v4_TED01\tCATH3.40.50_RES7-190\n",
@@ -176,7 +176,7 @@ def test_build_dimers_table_asserts_domain_pair_consistent(tmp_path):
 
 
 def test_build_dimers_table_asserts_intra_monomer(tmp_path):
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
 
     headers = [
         "7DI_AF-A0A005-F1-model_v4_TED01\tCATH3.40.50_RES7-190\n",
@@ -192,7 +192,7 @@ def test_build_dimers_table_asserts_intra_monomer(tmp_path):
 
 
 def test_build_dimers_table_asserts_interface_length_consistent(tmp_path):
-    from proteinfoundation.data.teddymer.parse_repdb_h import build_dimers_table
+    from proteinfoundation.datasets.teddymer.parse_repdb_h import build_dimers_table
 
     headers = [
         "7DI_AF-A0A005-F1-model_v4_TED01\tCATH3.40.50_RES7-190\n",

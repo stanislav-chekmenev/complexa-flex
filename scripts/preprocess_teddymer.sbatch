@@ -53,7 +53,7 @@ echo "  on-missing     = $ON_MISSING"
 echo "  sanity-n       = $SANITY_N"
 echo ""
 
-python -m proteinfoundation.data.teddymer.build_view \
+python -m proteinfoundation.datasets.teddymer.build_view \
     --staging "$STAGING" \
     --inventory "$INVENTORY" \
     --afdb-proteomes "$PROTEOMES" \

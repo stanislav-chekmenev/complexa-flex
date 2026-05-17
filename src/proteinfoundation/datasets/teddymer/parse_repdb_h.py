@@ -67,8 +67,9 @@ def parse_int_plddt(s: str) -> tuple[list[int], list[int]]:
 
     The Teddymer release encodes ``IntPlddt`` as two colon-separated digit
     strings, one per chain. Each digit ``d`` is the pLDDT bucket
-    ``[10*d, 10*d+10)`` with the lower bound used to compute the metadata's
-    ``AvgIntPlddt`` (verified empirically against the first 8 rows of
+    ``[10*d, 10*d+10)`` for ``d in 0..8`` and ``[90, 100]`` for ``d == 9``,
+    with the lower bound used to compute the metadata's ``AvgIntPlddt``
+    (verified empirically against the first 8 rows of
     ``nonsingletonrep_metadata.tsv``).
     """
     parts = s.split(":")
@@ -90,13 +91,19 @@ def _read_h_records(h_path: Path, idx_path: Path) -> Iterable[HeaderRecord]:
         names=["internal_id", "offset", "length"],
         dtype={"internal_id": "int64", "offset": "int64", "length": "int64"},
     )
+    internal_ids = idx["internal_id"].to_numpy()
     offsets = idx["offset"].to_numpy()
     lengths = idx["length"].to_numpy()
     with open(h_path, "rb") as f:
-        for off, ln in zip(offsets, lengths):
+        for internal_id, off, ln in zip(internal_ids, offsets, lengths):
             f.seek(int(off))
             chunk = f.read(int(ln)).decode("utf-8", errors="strict")
-            yield parse_header_line(chunk)
+            try:
+                yield parse_header_line(chunk)
+            except ValueError as exc:
+                raise ValueError(
+                    f"_h record internal_id={int(internal_id)} offset={int(off)}: {exc}"
+                ) from exc
 
 
 _DIMERS_ARROW_SCHEMA = pa.schema(
@@ -137,14 +144,11 @@ def build_dimers_table(h_path: Path, idx_path: Path, meta_path: Path) -> pd.Data
     for rec in _read_h_records(h_path, idx_path):
         by_dimer.setdefault(rec.dimer_index, []).append(rec)
 
-    meta = pd.read_csv(meta_path, sep="\t")
-    meta_by_idx: dict[int, dict] = {
-        int(row["DimerIndex"]): row for row in meta.to_dict("records")
-    }
+    meta = pd.read_csv(meta_path, sep="\t").set_index("DimerIndex", drop=False)
 
     rows: list[dict] = []
     for dimer_index, chains in by_dimer.items():
-        if dimer_index not in meta_by_idx:
+        if dimer_index not in meta.index:
             # Dimer is a singleton (or otherwise not in non-singleton reps); skip.
             continue
         if len(chains) != 2:
@@ -158,7 +162,7 @@ def build_dimers_table(h_path: Path, idx_path: Path, meta_path: Path) -> pd.Data
                 f"DimerIndex {dimer_index}: chains not intra-monomer "
                 f"(A={a.parent_afdb_id}, B={b.parent_afdb_id})"
             )
-        m = meta_by_idx[dimer_index]
+        m = meta.loc[dimer_index]
         expected_pair = f"TED{a.ted_index:02d}:TED{b.ted_index:02d}"
         if m["DomainPair"] != expected_pair:
             raise ValueError(

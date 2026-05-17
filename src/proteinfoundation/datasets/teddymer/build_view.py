@@ -7,7 +7,7 @@ AFDB ids against the AFDB v4 master inventory, and emits ``dimers.parquet``
 
 CLI usage:
 
-    python -m proteinfoundation.data.teddymer.build_view \\
+    python -m proteinfoundation.datasets.teddymer.build_view \\
         --staging   /path/to/teddymer/_raw \\
         --inventory /path/to/afdb_v4/.../inventory/manifests/batches \\
         --out       /path/to/teddymer_v1 \\
@@ -19,25 +19,30 @@ CLI usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import logging
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 
-from proteinfoundation.data.teddymer.build_locator import (
+from proteinfoundation.datasets.teddymer.build_locator import (
     build_locator_rows,
     write_locator_parquet,
 )
-from proteinfoundation.data.teddymer.parse_repdb_h import (
+from proteinfoundation.datasets.teddymer.parse_repdb_h import (
     add_complexa_filter,
     build_dimers_table,
     write_dimers_parquet,
 )
-from proteinfoundation.data.teddymer.sanity_check import sanity_check_dimers
+from proteinfoundation.datasets.teddymer.sanity_check import sanity_check_dimers
 
 
 logger = logging.getLogger(__name__)
+
+
+VIEW_NAME = "teddymer_v1"
 
 
 def run(
@@ -76,7 +81,12 @@ def run(
                 inventory, on_missing)
     locator = build_locator_rows(dimers, inventory, on_missing=on_missing)
     n_locator = len(locator)
-    logger.info("locator rows=%d", n_locator)
+    n_dimers_with_inventory = int(locator["dimer_index"].nunique())
+    coverage = n_dimers_with_inventory / max(n_dimers, 1)
+    logger.info(
+        "locator rows=%d, dimers with inventory=%d/%d (%.2f%%)",
+        n_locator, n_dimers_with_inventory, n_dimers, 100.0 * coverage,
+    )
 
     dimers_path = out / "dimers.parquet"
     locator_path = out / "locator_rows.parquet"
@@ -104,9 +114,28 @@ def run(
                 f"sanity check failed on {n_sanity_failures}/{n_sample} dimers"
             )
 
+    view_config = {
+        "name": VIEW_NAME,
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "inventory_source": str(inventory),
+        "raw_input_dir": str(staging),
+        "afdb_proteomes": str(afdb_proteomes) if afdb_proteomes else None,
+        "dimers_path": str(dimers_path),
+        "locator_rows_path": str(locator_path),
+        "row_count": n_dimers,
+        "n_complexa_filter": n_complexa,
+        "n_dimers_with_inventory": n_dimers_with_inventory,
+        "n_locator_rows": n_locator,
+        "on_missing": on_missing,
+        "sanity_n": sanity_n,
+        "sanity_failures": n_sanity_failures,
+    }
+    (out / "view_config.yaml").write_text(yaml.safe_dump(view_config, sort_keys=False))
+
     return {
         "n_dimers": n_dimers,
         "n_complexa_filter": n_complexa,
+        "n_dimers_with_inventory": n_dimers_with_inventory,
         "n_locator_rows": n_locator,
         "n_sanity_failures": n_sanity_failures,
     }

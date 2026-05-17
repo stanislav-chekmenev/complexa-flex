@@ -66,7 +66,7 @@ def _write_fake_inventory_batch(inv_dir: Path, afdb_ids: list[str], idx: int) ->
 
 
 def test_build_locator_rows_two_chains_per_dimer(tmp_path):
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -92,7 +92,7 @@ def test_build_locator_rows_two_chains_per_dimer(tmp_path):
 
 
 def test_build_locator_rows_raises_on_missing_afdb_id(tmp_path):
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -113,7 +113,7 @@ def test_build_locator_rows_on_missing_drop_silently_drops(tmp_path):
     """In operational mode the AFDB inventory only covers ~12% of AFDB v4, so the
     builder must support dropping dimers whose parent is not in the inventory.
     """
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -133,7 +133,7 @@ def test_build_locator_rows_on_missing_drop_silently_drops(tmp_path):
 
 
 def test_build_locator_rows_invalid_on_missing_raises(tmp_path):
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -153,7 +153,7 @@ def test_build_locator_rows_dedups_duplicate_inventory_rows(tmp_path):
     """If an afdb_id appears in two batches (shouldn't happen but defensive),
     we keep the first occurrence so the row count remains 2 x N_dimers.
     """
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -175,7 +175,7 @@ def test_build_locator_rows_streams_only_needed_rows(tmp_path):
     """The join must work even when the AFDB inventory is much larger than
     the dimers set — most rows are irrelevant and should be filtered out per-batch.
     """
-    from proteinfoundation.data.teddymer.build_locator import build_locator_rows
+    from proteinfoundation.datasets.teddymer.build_locator import build_locator_rows
 
     inv_dir = tmp_path / "inv"
     inv_dir.mkdir()
@@ -207,7 +207,7 @@ def test_build_locator_rows_output_schema_matches_la_proteina(tmp_path):
     """The output must carry every column the la_proteina_afdb_512_v1 locator
     parquet carries, plus our 3 extra columns (dimer_id, dimer_index, chain_id).
     """
-    from proteinfoundation.data.teddymer.build_locator import (
+    from proteinfoundation.datasets.teddymer.build_locator import (
         build_locator_rows,
         LOCATOR_INVENTORY_COLS,
     )

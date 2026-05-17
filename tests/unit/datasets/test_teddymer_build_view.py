@@ -80,8 +80,10 @@ def _write_teddymer_staging(staging: Path) -> None:
     (staging / "nonsingletonrep_metadata.tsv").write_text(meta)
 
 
-def test_run_end_to_end_writes_both_parquets(tmp_path):
-    from proteinfoundation.data.teddymer.build_view import run
+def test_run_end_to_end_writes_both_parquets_and_view_config(tmp_path):
+    import yaml
+
+    from proteinfoundation.datasets.teddymer.build_view import run
 
     staging = tmp_path / "staging"
     staging.mkdir()
@@ -104,6 +106,7 @@ def test_run_end_to_end_writes_both_parquets(tmp_path):
     )
     assert (out / "dimers.parquet").exists()
     assert (out / "locator_rows.parquet").exists()
+    assert (out / "view_config.yaml").exists()
 
     dimers = pd.read_parquet(out / "dimers.parquet")
     assert len(dimers) == 2
@@ -115,11 +118,24 @@ def test_run_end_to_end_writes_both_parquets(tmp_path):
 
     assert result["n_dimers"] == 2
     assert result["n_complexa_filter"] == 1
+    assert result["n_dimers_with_inventory"] == 2
     assert result["n_locator_rows"] == 4
+
+    config = yaml.safe_load((out / "view_config.yaml").read_text())
+    assert config["name"] == "teddymer_v1"
+    assert config["row_count"] == 2
+    assert config["n_complexa_filter"] == 1
+    assert config["n_dimers_with_inventory"] == 2
+    assert config["n_locator_rows"] == 4
+    assert config["on_missing"] == "raise"
+    assert config["inventory_source"] == str(inv)
+    assert config["raw_input_dir"] == str(staging)
+    assert config["dimers_path"].endswith("dimers.parquet")
+    assert config["locator_rows_path"].endswith("locator_rows.parquet")
 
 
 def test_run_drops_dimers_outside_inventory_when_requested(tmp_path):
-    from proteinfoundation.data.teddymer.build_view import run
+    from proteinfoundation.datasets.teddymer.build_view import run
 
     staging = tmp_path / "staging"
     staging.mkdir()
@@ -143,4 +159,5 @@ def test_run_drops_dimers_outside_inventory_when_requested(tmp_path):
     assert len(locator) == 2
     assert set(locator["dimer_index"].unique()) == {7}
     assert result["n_dimers"] == 2
+    assert result["n_dimers_with_inventory"] == 1
     assert result["n_locator_rows"] == 2
