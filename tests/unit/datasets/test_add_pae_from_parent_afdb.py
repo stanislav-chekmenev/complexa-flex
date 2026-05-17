@@ -117,7 +117,10 @@ def test_pae_is_directional_no_symmetrisation(tmp_path):
 
     out = transform(data)
 
-    assert out.pae_residue_pair[2, 5].item() != out.pae_residue_pair[5, 2].item()
+    L = out.pae_residue_pair.shape[0]
+    off_diag_mask = ~torch.eye(L, dtype=torch.bool)
+    delta = (out.pae_residue_pair - out.pae_residue_pair.T).abs()
+    assert delta[off_diag_mask].median().item() > 1e-3
     assert out.pae_residue_pair[2, 5].item() == pytest.approx(float(matrix[2, 5]))
     assert out.pae_residue_pair[5, 2].item() == pytest.approx(float(matrix[5, 2]))
 
@@ -192,6 +195,39 @@ def test_pae_mask_true_inside_both_endpoints(tmp_path):
     assert out.pae_mask.shape == (n, n)
     assert out.pae_mask.dtype == torch.bool
     assert bool(out.pae_mask.all().item())
+
+
+def test_pae_transposed_index_regression(tmp_path):
+    """Regression: catches a transposed (i, j) -> (j, i) bug.
+
+    Builds a matrix where `pae[i, j] = 2 * i + j` so every off-diagonal
+    cell asymmetric. Two adjacent intervals (1-5 and 6-10) flatten to
+    contiguous 0-indexed positions [0..9]; asserting on specific cell
+    values pins down the axis convention, where the equivalent
+    median-based check (item #4) would tolerate a global transpose.
+    """
+    n = 10
+    rows = np.arange(n).reshape(-1, 1)
+    cols = np.arange(n).reshape(1, -1)
+    matrix = (2 * rows + cols).astype(np.int64)
+    assert matrix[2, 5] == 9
+    assert matrix[5, 2] == 12
+
+    fake = build_fake_afdb_tar(
+        tmp_path, "AF-FAKE0001-F1", _confidence_score_dense(n), matrix
+    )
+    data = _make_data_with_locator(
+        fake,
+        intervals_a=[{"lo": 1, "hi": 5}],
+        intervals_b=[{"lo": 6, "hi": 10}],
+        afdb_root=tmp_path,
+    )
+    transform = _instantiate_transform(tmp_path)
+
+    out = transform(data)
+
+    assert out.pae_residue_pair[2, 5].item() == pytest.approx(9.0)
+    assert out.pae_residue_pair[5, 2].item() == pytest.approx(12.0)
 
 
 def test_pae_discontinuous_domain_residue_indexing(tmp_path):
