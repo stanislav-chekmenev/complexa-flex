@@ -3,11 +3,11 @@ emit ``locator_rows.parquet``.
 
 The AFDB master inventory at
 ``/mnt/labs/shared/databases/afdb_v4_bulk/inventory_first/inventory/manifests/batches/``
-is sharded into ~500 ``w0_b*.parquet`` files, each carrying tar-byte-offset
-locators for a few hundred thousand entries. This module streams them, keeps
-only the rows whose ``afdb_id`` is needed by the Teddymer dimers set, and
-expands each dimer into two rows (chain A and chain B) sharing the same
-parent monomer locator.
+is sharded across multiple workers as ``w{N}_b*.parquet`` files, each carrying
+tar-byte-offset locators for a few hundred thousand entries. This module
+streams them, keeps only the rows whose ``afdb_id`` is needed by the Teddymer
+dimers set, and expands each dimer into two rows (chain A and chain B)
+sharing the same parent monomer locator.
 
 The output schema mirrors
 ``inventory_first/views/la_proteina_afdb_512_v1/locator_rows.parquet`` with
@@ -37,12 +37,12 @@ LOCATOR_INVENTORY_COLS: list[str] = [
 def _load_needed_inventory_rows(
     inventory_dir: Path, needed_afdb_ids: set[str]
 ) -> pd.DataFrame:
-    """Scan every ``w0_b*.parquet`` under ``inventory_dir`` and concatenate the
+    """Scan every ``w*_b*.parquet`` under ``inventory_dir`` and concatenate the
     rows whose ``afdb_id`` is in ``needed_afdb_ids``. Drops duplicate afdb_ids
     keeping the first occurrence (defensive — shouldn't happen, but harmless)."""
-    batch_paths = sorted(Path(inventory_dir).glob("w0_b*.parquet"))
+    batch_paths = sorted(Path(inventory_dir).glob("w*_b*.parquet"))
     if not batch_paths:
-        raise FileNotFoundError(f"No w0_b*.parquet under {inventory_dir}")
+        raise FileNotFoundError(f"No w*_b*.parquet under {inventory_dir}")
 
     dataset = ds.dataset([str(p) for p in batch_paths], format="parquet")
     filt = ds.field("afdb_id").isin(list(needed_afdb_ids))
@@ -61,14 +61,14 @@ def build_locator_rows(
 
     Args:
         dimers: DataFrame with ``dimer_id``, ``dimer_index``, ``parent_afdb_id``.
-        inventory_dir: directory of ``w0_b*.parquet`` AFDB master-inventory
+        inventory_dir: directory of ``w*_b*.parquet`` AFDB master-inventory
             batches.
         on_missing: how to handle parent AFDB ids not found in the inventory:
             ``"raise"`` (default) raises ``ValueError``;
             ``"drop"`` silently drops the corresponding dimers and proceeds.
-            The local AFDB v4 mirror's inventory only covers ~12% of AFDB v4,
-            so ``"drop"`` is the operational mode for the build script while
-            tests use ``"raise"`` to lock in the failure semantics.
+            Some parent AFDB ids may still be missing from the local mirror;
+            use ``"drop"`` operationally, ``"raise"`` in tests to lock in
+            the failure semantics.
     """
     if on_missing not in {"raise", "drop"}:
         raise ValueError(f"on_missing must be 'raise' or 'drop', got {on_missing!r}")
