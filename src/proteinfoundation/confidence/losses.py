@@ -110,8 +110,8 @@ def combined_plddt_loss(
     plddt_continuous: torch.Tensor,
     mask: torch.Tensor,
     bin_centers: torch.Tensor,
-    ce_weight: float = 0.7,
-    smooth_l1_weight: float = 0.3,
+    ce_weight: float = 0.9,
+    smooth_l1_weight: float = 0.1,
     label_smoothing: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """`ce_weight * CE + smooth_l1_weight * SmoothL1_on_EV`.
