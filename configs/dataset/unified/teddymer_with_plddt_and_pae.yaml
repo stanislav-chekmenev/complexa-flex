@@ -37,14 +37,23 @@ datamodule:
   # trains the confidence head on the full dimer, not on a binder-target
   # split, and FilterTargetResiduesTransform would desync `pae_residue_pair`
   # whose second axis it does not slice.
+  #
+  # Geometry posture matches the inference-time distribution of the frozen
+  # Proteina trunk: per-step `center_every_step=True` on the `bb_ca`
+  # modality recenters generated coords to full-COM-zero over Calpha only
+  # (rdn_flow_matcher.py:436, _force_zero_com). `CenteringTransform` here
+  # uses `center_mode="full"`, `data_mode="bb_ca"` to match that. The
+  # trunk's `feats_seq` / `feats_pair_repr` (read from `complexa.ckpt`)
+  # request neither `chain_break_seq` nor frame fields, so
+  # `ChainBreakPerResidueTransform` and `OpenFoldFrameTransform` are not
+  # included; chain identity reaches the trunk via dataset-native
+  # `data.chains` / `data.chain_idx`.
   atom37_transforms:
     - _target_: proteinfoundation.datasets.transforms.CoordsToNanometers
     - _target_: proteinfoundation.datasets.transforms.GlobalRotationTransform
-    - _target_: proteinfoundation.datasets.transforms.OpenFoldFrameTransform
-    - _target_: proteinfoundation.datasets.transforms.ChainBreakPerResidueTransform
     - _target_: proteinfoundation.datasets.transforms.CenteringTransform
       center_mode: "full"
-      data_mode: "all-atom"
+      data_mode: "bb_ca"
     - _target_: proteinfoundation.datasets.transforms.AddPLDDTFromParentAFDB
       bin_width: 2.0
       max_bins: 50
