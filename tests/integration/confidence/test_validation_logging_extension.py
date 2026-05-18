@@ -30,19 +30,19 @@ LATENT_DIM = 8
 TRUNK_EVAL_T = 0.99
 
 PR4_VAL_KEYS = {
-    "val/loss",
-    "val/loss_ce",
-    "val/loss_smooth_l1",
-    "val/loss_total",
-    "val/ece",
-    "val/plddt_accuracy",
-    "val/plddt_mae",
-    "val/pearson_r",
-    "val/spearman_r",
-    "val/mae_lt50",
-    "val/mae_50_70",
-    "val/mae_70_90",
-    "val/mae_ge90",
+    "val/plddt/loss",
+    "val/plddt/loss_ce",
+    "val/plddt/loss_smooth_l1",
+    "val/plddt/loss_total",
+    "val/plddt/ece",
+    "val/plddt/plddt_accuracy",
+    "val/plddt/plddt_mae",
+    "val/plddt/pearson_r",
+    "val/plddt/spearman_r",
+    "val/plddt/mae_lt50",
+    "val/plddt/mae_50_70",
+    "val/plddt/mae_70_90",
+    "val/plddt/mae_ge90",
 }
 
 
@@ -234,7 +234,7 @@ def test_pr4_validation_keys_preserved_and_ece_adaptive_logged(tmp_path: Path) -
     logged = set(trainer.callback_metrics.keys())
     missing = PR4_VAL_KEYS - logged
     assert not missing, f"PR-4 validation keys missing: {missing}"
-    assert "val/ece_adaptive" in logged
+    assert "val/plddt/ece_adaptive" in logged
 
 
 def test_reliability_diagram_npy_fallback_written(tmp_path: Path) -> None:

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Single-GPU smoke run for PR-5 verification.
 #
-# Exit criterion: 100 steps complete, `val/loss_ce` is finite,
-# `val/ece_adaptive` is logged, and a reliability-diagram artifact appears
+# Exit criterion: 100 steps complete, `val/plddt/loss_ce` is finite,
+# `val/plddt/ece_adaptive` is logged, and a reliability-diagram artifact appears
 # under the trainer log dir.
 #
 # Required env vars:

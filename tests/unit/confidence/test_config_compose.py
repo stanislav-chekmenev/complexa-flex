@@ -43,5 +43,6 @@ def test_ddp_strategy_declared() -> None:
 
 def test_loss_defaults_round_two() -> None:
     cfg = _compose_distillation_cfg()
+    assert cfg.training.loss.ce_weight == 0.9
     assert cfg.training.loss.smooth_l1_weight == 0.1
     assert cfg.training.loss.label_smoothing == 0.05

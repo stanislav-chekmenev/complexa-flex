@@ -7,6 +7,8 @@ Importing this package triggers registration of every concrete head via the
 from __future__ import annotations
 
 from proteinfoundation.nn.confidence.base import BaseConfidenceHead, ConfidenceTrunk
+from proteinfoundation.nn.confidence.multi_head import MultiHeadConfidence
+from proteinfoundation.nn.confidence.pae_head import PaeHead
 from proteinfoundation.nn.confidence.plddt_head import PLDDTHead
 from proteinfoundation.nn.confidence.plddt_sequence_only_head import (
     SequenceOnlyPLDDTHead,
@@ -21,6 +23,8 @@ from proteinfoundation.nn.confidence.registry import (
 __all__ = [
     "BaseConfidenceHead",
     "ConfidenceTrunk",
+    "MultiHeadConfidence",
+    "PaeHead",
     "PLDDTHead",
     "SequenceOnlyPLDDTHead",
     "PairProjection",

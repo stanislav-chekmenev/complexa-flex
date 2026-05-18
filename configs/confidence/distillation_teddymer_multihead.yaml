@@ -1,0 +1,95 @@
+# @package _global_
+#
+# Joint pLDDT + directional-PAE distillation on the Teddymer dimer view.
+#
+# Two layers of loss weighting (kept structurally separate by Hydra
+# convention):
+#   - within-head: `confidence.head.children.{plddt,pae}.{ce_weight,
+#     ev_weight, label_smoothing}` (per CE / SmoothL1-on-EV recipe).
+#   - across-head: `confidence.head.loss_weights.{plddt, pae}` multiplies
+#     each head's total before summing. `loss_weights.<name> = 0.0` is a
+#     hard short-circuit (skips the child's loss call entirely; zero
+#     gradient through that child's path).
+
+defaults:
+  - /nn/confidence/multi_head@confidence.head
+  - /dataset/unified/teddymer_with_plddt_and_pae@data
+  - /training/confidence_distill@training
+  - _self_
+
+confidence:
+  head:
+    children:
+      plddt:
+        _target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
+        trunk:
+          _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
+          token_dim: 768
+          pair_repr_dim: 256
+          n_blocks: 4
+          n_heads: 16
+          dim_cond: 256
+          use_tri_mult: true
+          use_tri_attn: false
+          use_qkln: true
+          dropout: 0.1
+          update_pair_repr_every_n: 1
+        token_dim: 768
+        pair_repr_dim: 256
+        num_plddt_bins: 50
+        bin_min: 0.0
+        bin_max: 100.0
+        ce_weight: 0.9
+        ev_weight: 0.1
+        label_smoothing: 0.05
+      pae:
+        _target_: proteinfoundation.nn.confidence.pae_head.PaeHead
+        trunk:
+          _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
+          token_dim: 768
+          pair_repr_dim: 256
+          n_blocks: 4
+          n_heads: 16
+          dim_cond: 256
+          use_tri_mult: true
+          use_tri_attn: false
+          use_qkln: true
+          dropout: 0.1
+          update_pair_repr_every_n: 1
+        token_dim: 768
+        pair_repr_dim: 256
+        num_pae_bins: 64
+        bin_min: 0.0
+        bin_max: 32.0
+        ce_weight: 0.9
+        ev_weight: 0.1
+        label_smoothing: 0.0
+    loss_weights:
+      plddt: 0.7
+      pae: 0.7
+
+trainer:
+  _target_: lightning.pytorch.Trainer
+  accelerator: gpu
+  devices: 1
+  strategy: ddp_find_unused_parameters_false
+  precision: ${training.precision}
+  max_epochs: ${training.max_epochs}
+  gradient_clip_val: ${training.gradient_clip_val}
+  log_every_n_steps: 25
+  check_val_every_n_epoch: 1
+  callbacks:
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      monitor: "val/multi/total"
+      mode: "min"
+      save_top_k: 3
+      filename: "multi-{epoch:03d}-{val/multi/total:.4f}"
+      auto_insert_metric_name: false
+
+data:
+  datamodule:
+    cluster_column: null
+    cluster_seed: 42
+
+seed: 42
+run_name: "multi-plddt-pae-distill-teddymer"
