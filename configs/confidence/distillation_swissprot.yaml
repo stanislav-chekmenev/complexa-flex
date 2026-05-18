@@ -37,3 +37,6 @@ data:
 
 seed: 42
 run_name: "plddt-distill-swissprot"
+
+integrity:
+  enabled: false

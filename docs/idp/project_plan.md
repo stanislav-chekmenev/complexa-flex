@@ -1,4 +1,4 @@
-# Project plan for IDP binder design
+`# Project plan for IDP binder design
 
 ## Current state of IDP binder design
 
@@ -26,7 +26,7 @@ The diffraction data has implicit information about the rotamer states of a prot
 The goal is to use that information alongside the sequence and structure information to train a binder generative model for IDPs/IDRs. The main idea is the following - **ensemble modelling improves co-folding**. Benefits:
 
 - Possiblity to implicitly model altlocs (alternative locations) in PDB -> have more data to train on -> better co-folding models.
-- Modelling side-chain wiggles explicitly allows to "tune" for specificity, which is associated with hydrogen bonds formed between target side-chains and binder side-chains, target side-chains and binder backbone, binder side-chains and target backbone. Additionally desolvation penalty can be modelled with $\Delta SASA$ (solvent accessible surface area) computed over several rotamers, which is substantially more robust than when it's computed for a single conformation. 
+- Modelling side-chain wiggles explicitly allows to "tune" for specificity, which is associated with hydrogen bonds formed between target side-chains and binder side-chains, target side-chains and binder backbone, binder side-chains and target backbone. Additionally desolvation penalty can be modelled with $\`Delta SASA$ (solvent accessible surface area) computed over several rotamers, which is substantially more robust than when it's computed for a single conformation. 
 - Diffraction data might have useful signal for identifying IDR conformations -> it's an additional conditioning signal during training.
 - If we can model water molecules explicitly, this would give access to desolvation as well. 
 
@@ -44,17 +44,35 @@ The goal is to use that information alongside the sequence and structure informa
 
 **Downstream tasks**
 
+    1. Training a compact protein model on multiple conformers, using the reflections JEPA representations. (**assumption: Phenix gives us meaningful conformers**)
 
-
-
-    1. Training or finetuning a protein model on multiple conformers, using the reflections JEPA representations. (**assumption: Phenix gives us meaningful conformers**)
         - Generate a dataset of altlocs, using [Phenix](https://phenix-online.org/documentation/reference/ensemble_refinement.html). 10-50K monomers?
-        - Finetune Boltz to output several conformers. 
-            - Idea 1 for Complexa: freeze Complexa, add the JEPA-encoder as an additional input, fuse its embeddings to the pair features at different layers, add a few trainable Proteina blocks to the head of the model.
-            - Idea 2: Use LoRA with Complexa, but bias LoRA matrices with the JEPA embeddings. 
-        - Finetune on a simple folding task - sequence + reflections to conformers
+        - Mimic Complexa's architecture and train a folding model that would use JEPA's embeddings as input and attention bias.
+            - Use an already pretrained VAE for all-atom reconstruction.
+            - Only train a compact FlowMatching-based trunk to predict C-alphas and the latents from sequence and reflection data alone.
+        
+    2.  Finetuning Complexa adding JEPA embeddings.
 
-- Use Gaussian splatting (NeRFs) instead of voxels. Conformer generation utilising weight symmetries of neural fields??? Can we do JEPA on weights??? Need more reading
-- Representation learning with the voxels/NeRFs/both can be a paper on its own if we manage to show some good performance on downstream tasks, especially with IDRs. 
+        - Use LoRA with Complexa, but bias LoRA matrices with the JEPA embeddings. 
+        - Finetune on a simple folding task - sequence + reflections to conformers. (It might be not trivial!)
 
-### Step 2`
+#### 2 - Neural Fields and weight symmetries
+
+    - Use nueral fields instead of voxels. 
+    - Conformer generation utilising weight symmetries of neural fields??? 
+    - Can we do JEPA on weights??? Need more reading!
+
+#### 3 - Reciprocal space perturbations for conformer generation
+
+    - To be discussed with Hamlet to get more details
+
+#### 4 - Diffuse scattering path
+
+    - Talk to Alex and check the data (an LLM says there are around 5M raw images online where we could search for diffuse scattering patterns)
+    - Can open up a possibility to capture disorder in more details.
+
+### Towards the end goal
+
+#### 1 - FM with reflections
+
+    - Adding a reflection flow into the gen pipeline, so we could actually use it to generate conformers.
