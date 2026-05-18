@@ -1,0 +1,14 @@
+defaults:
+  - base
+  - _self_
+
+_target_: proteinfoundation.nn.confidence.pae_head.PaeHead
+token_dim: 768
+pair_repr_dim: 256
+num_pae_bins: 64
+bin_min: 0.0
+bin_max: 32.0
+ce_weight: 0.9
+ev_weight: 0.1
+label_smoothing: 0.0
+num_bins_ece_adaptive: 15

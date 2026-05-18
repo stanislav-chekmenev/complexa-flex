@@ -7,8 +7,11 @@ opt:
   betas: [0.9, 0.999]
   warmup_steps: 500
   min_lr: 5.0e-6
+# DEPRECATED since PR-B Slice 2: these values are ignored. Set
+# `ce_weight` / `ev_weight` / `label_smoothing` under `confidence.head` in
+# the head's Hydra block (`configs/nn/confidence/{plddt,pae}_head.yaml`).
 loss:
-  ce_weight: 0.7
+  ce_weight: 0.9
   smooth_l1_weight: 0.1
   label_smoothing: 0.05
 max_epochs: 50

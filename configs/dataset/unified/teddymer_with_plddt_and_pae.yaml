@@ -1,0 +1,55 @@
+# Teddymer dimer view with per-residue AF2 pLDDT labels and directional
+# per-residue-pair PAE labels read from parent AFDB tars via
+# locator_rows.parquet. Consumed by the existing pLDDT confidence sidecar
+# and (PR-B) by the asymmetric PaeHead.
+#
+# DO NOT add `ted_dimers` to defaults — it injects `path_column: path`
+# that breaks Teddymer's tar-offset loading.
+
+defaults:
+  - _self_
+
+datamodule:
+  _target_: proteinfoundation.datasets.teddymer.dataset.TeddymerDimerDataModule
+  dimers_parquet: ${oc.env:TEDDYMER_VIEW_ROOT,/mnt/storage01/home/schekmenev/data/teddymer_v1}/dimers.parquet
+  locator_parquet: ${oc.env:TEDDYMER_VIEW_ROOT,/mnt/storage01/home/schekmenev/data/teddymer_v1}/locator_rows.parquet
+  afdb_proteomes_root: ${oc.env:AFDB_PROTEOMES_ROOT,/mnt/labs/shared/databases/afdb_v4_bulk/proteomes/v4}
+  batch_size: 6
+  num_workers: 16
+  train_split: 0.99
+  id_column: dimer_id
+  pin_memory: true
+  seed: 0
+
+  filters:
+    - "complexa_filter == True"
+
+  atomarray_transforms: []
+
+  # Pipeline order: geometry transforms first (residue-count preserving), then
+  # AFDB label transforms emit per-residue / per-pair labels aligned with the
+  # post-geometry token order. `chain_idx` is derived from `data.chains` after
+  # this loop returns, so it tracks any reordering the geometry transforms do.
+  #
+  # The binder/target generative transforms from ted_dimers.yaml
+  # (CroppingTransform2, ContactTransform, ExtractTargetCoordinatesTransform,
+  # FilterTargetResiduesTransform) are deliberately omitted: this pipeline
+  # trains the confidence head on the full dimer, not on a binder-target
+  # split, and FilterTargetResiduesTransform would desync `pae_residue_pair`
+  # whose second axis it does not slice.
+  atom37_transforms:
+    - _target_: proteinfoundation.datasets.transforms.CoordsToNanometers
+    - _target_: proteinfoundation.datasets.transforms.GlobalRotationTransform
+    - _target_: proteinfoundation.datasets.transforms.OpenFoldFrameTransform
+    - _target_: proteinfoundation.datasets.transforms.ChainBreakPerResidueTransform
+    - _target_: proteinfoundation.datasets.transforms.CenteringTransform
+      center_mode: "full"
+      data_mode: "all-atom"
+    - _target_: proteinfoundation.datasets.transforms.AddPLDDTFromParentAFDB
+      bin_width: 2.0
+      max_bins: 50
+      scale_max: 100.0
+    - _target_: proteinfoundation.datasets.transforms.AddPAEFromParentAFDB
+      bin_width: 0.5
+      max_bins: 64
+      scale_max: 31.75

@@ -1,0 +1,50 @@
+# @package _global_
+#
+# Single-head PAE distillation on the Teddymer dimer view.
+#
+# AFDB integer-A label bias (documented in `pae_head.py`): AFDB v4 PAE
+# values are stored as integer Angstroms in `[0, 31]`. With
+# `bin_width=0.5` the bin centers land at `[0.25, 0.75, ..., 31.75]`, so
+# the EV of a one-hot integer-A label is biased `+0.25 A` high relative
+# to the true integer-A value. The SmoothL1 EV term consumes the float-A
+# label `pae_residue_pair` and cancels its share of the bias at training
+# time. At the default `0.9 * CE + 0.1 * SmoothL1` split, the
+# stationary-point EV is `0.9 * (k + 0.25) + 0.1 * k = k + 0.225`, so the
+# residual model bias on validation MAE is approximately `+0.225 A` —
+# still well within the AFDB label noise floor.
+
+defaults:
+  - /nn/confidence/pae_head@confidence.head
+  - /dataset/unified/teddymer_with_plddt_and_pae@data
+  - /training/confidence_distill@training
+  - _self_
+
+trainer:
+  _target_: lightning.pytorch.Trainer
+  accelerator: gpu
+  devices: 1
+  strategy: ddp_find_unused_parameters_false
+  precision: ${training.precision}
+  max_epochs: ${training.max_epochs}
+  gradient_clip_val: ${training.gradient_clip_val}
+  log_every_n_steps: 25
+  check_val_every_n_epoch: 1
+  callbacks:
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      monitor: "val/pae/loss_ce"
+      mode: "min"
+      save_top_k: 3
+      filename: "pae-ce-{epoch:03d}-{val/pae/loss_ce:.4f}"
+      auto_insert_metric_name: false
+    - _target_: lightning.pytorch.callbacks.EarlyStopping
+      monitor: "val/pae/loss_ce"
+      mode: "min"
+      patience: 10
+
+data:
+  datamodule:
+    cluster_column: null
+    cluster_seed: 42
+
+seed: 42
+run_name: "pae-distill-teddymer"

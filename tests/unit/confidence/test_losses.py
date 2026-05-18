@@ -97,11 +97,11 @@ def test_combined_loss_decomposition() -> None:
         targets,
         mask,
         centers,
-        ce_weight=0.7,
-        smooth_l1_weight=0.3,
+        ce_weight=0.9,
+        smooth_l1_weight=0.1,
         label_smoothing=0.0,
     )
-    expected = 0.7 * ce + 0.3 * sl1
+    expected = 0.9 * ce + 0.1 * sl1
     assert torch.allclose(total, expected, atol=1e-6)
     assert torch.allclose(parts["loss_ce"], ce, atol=1e-6)
     assert torch.allclose(parts["loss_smooth_l1"], sl1, atol=1e-6)

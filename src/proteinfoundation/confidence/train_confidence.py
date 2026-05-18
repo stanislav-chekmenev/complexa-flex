@@ -42,6 +42,13 @@ def main(cfg: DictConfig) -> None:
     head = build_confidence_head_from_cfg(cfg.confidence.head)
 
     training_cfg = cfg.training
+    # Loss weights / label smoothing live on the head's Hydra block since
+    # PR-B Slice 2 (see `configs/nn/confidence/{plddt,pae}_head.yaml`). We
+    # still forward `cfg.training.loss.*` into the Lightning module so legacy
+    # configs that override these values surface the DeprecationWarning
+    # emitted in `ConfidenceDistillationModule.__init__`; the kwargs are
+    # otherwise no-op on the module side.
+    loss_cfg = training_cfg.get("loss", {})
     module = ConfidenceDistillationModule(
         head=head,
         trunk_ckpt_path=training_cfg.trunk_ckpt_path,
@@ -52,9 +59,9 @@ def main(cfg: DictConfig) -> None:
         betas=tuple(training_cfg.opt.betas),
         warmup_steps=training_cfg.opt.warmup_steps,
         min_lr=training_cfg.opt.min_lr,
-        ce_weight=training_cfg.loss.ce_weight,
-        smooth_l1_weight=training_cfg.loss.smooth_l1_weight,
-        label_smoothing=training_cfg.loss.get("label_smoothing", 0.0),
+        ce_weight=loss_cfg.get("ce_weight", 0.9),
+        smooth_l1_weight=loss_cfg.get("smooth_l1_weight", 0.1),
+        label_smoothing=loss_cfg.get("label_smoothing", 0.05),
     )
 
     datamodule = hydra.utils.instantiate(cfg.data.datamodule)
