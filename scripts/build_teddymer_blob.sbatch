@@ -3,9 +3,9 @@
 #SBATCH --partition=cpu
 #SBATCH --qos=normal
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=2:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/teddymer_blob_repack_%j.out
 #SBATCH --error=logs/teddymer_blob_repack_%j.err
 
