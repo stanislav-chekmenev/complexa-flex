@@ -88,8 +88,16 @@ for ckpt_name in complexa.ckpt complexa_ae.ckpt; do
 done
 echo "Checkpoint staging complete."
 
-# Teddymer view + AFDB parent tars are read from their shared paths via
-# the dataset's env defaults (`TEDDYMER_VIEW_ROOT`, `AFDB_PROTEOMES_ROOT`).
+# Teddymer view: the dataset's Hydra defaults now point at the staged
+# /netscratch blob at `/netscratch/schekmenev/teddymer_v1_blob/` (single
+# `data.blob` + locator + dimers + `data.md5` sidecar). The train-start
+# integrity gate (`integrity.enabled=true` in
+# `distillation_teddymer_pae.yaml`) verifies the live files against the
+# labs-adjacent snapshot at
+# `/mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5` before any
+# GPU work. To run against labs directly, override the env vars
+# `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` and set
+# `+integrity.enabled=false` on the command line.
 
 export DATA_PATH="$DATA_ROOT"
 export CKPT_DIR="$CKPT_DIR_DST"

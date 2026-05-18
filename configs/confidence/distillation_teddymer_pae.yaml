@@ -48,3 +48,8 @@ data:
 
 seed: 42
 run_name: "pae-distill-teddymer"
+
+integrity:
+  enabled: true
+  view_root: ${oc.env:TEDDYMER_VIEW_ROOT,/netscratch/schekmenev/teddymer_v1_blob}
+  snapshot_path: /mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5
