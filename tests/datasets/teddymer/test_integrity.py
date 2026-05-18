@@ -58,21 +58,34 @@ def _stage_blob_view(tmp_path: Path) -> dict:
     write_md5_sidecar(
         [blob_path, locator_dst, dimers_dst], sidecar_path=sidecar, relative_to=out_dir
     )
-    snapshot = tmp_path / "snapshot.md5"
+    snapshot_dir = tmp_path / "snapshot_dir"
+    snapshot_dir.mkdir()
+    snapshot = snapshot_dir / "data.md5"
     shutil.copyfile(sidecar, snapshot)
 
+    version = "teddymer_v1_blob_20260518_abcd1234"
+    md5s = {
+        "data.blob": compute_md5(blob_path),
+        "locator_rows.parquet": compute_md5(locator_dst),
+        "dimers.parquet": compute_md5(dimers_dst),
+    }
     write_view_config(
         out_dir,
-        version="teddymer_v1_blob_20260518_abcd1234",
+        version=version,
         blob_path=blob_path,
         locator_path=locator_dst,
         dimers_path=dimers_dst,
         labs_root=info["labs_root"],
-        md5s={
-            "data.blob": compute_md5(blob_path),
-            "locator_rows.parquet": compute_md5(locator_dst),
-            "dimers.parquet": compute_md5(dimers_dst),
-        },
+        md5s=md5s,
+    )
+    write_view_config(
+        snapshot_dir,
+        version=version,
+        blob_path=blob_path,
+        locator_path=locator_dst,
+        dimers_path=dimers_dst,
+        labs_root=info["labs_root"],
+        md5s=md5s,
     )
 
     return {
@@ -177,6 +190,52 @@ def test_verify_integrity_fails_on_missing_blob(tmp_path):
             snapshot_path=staged["snapshot"],
         )
     assert "data.blob" in str(excinfo.value)
+
+
+def test_verify_integrity_fails_on_version_mismatch(tmp_path):
+    """Version-string fast path (plan section 4.3 + R12): when the
+    snapshot-side ``view_config.yaml`` carries a different ``version`` than
+    the view-side one, the gate must raise IntegrityError WITHOUT computing
+    any md5."""
+    from proteinfoundation.datasets.teddymer.integrity import IntegrityError
+
+    staged = _stage_blob_view(tmp_path)
+    snapshot_view = staged["snapshot"].parent / "view_config.yaml"
+    cfg = yaml.safe_load(snapshot_view.read_text())
+    old_version = cfg["version"]
+    cfg["version"] = "teddymer_v1_blob_20260601_ffffffff"
+    snapshot_view.write_text(yaml.safe_dump(cfg, sort_keys=True))
+
+    with mock.patch(
+        "proteinfoundation.datasets.teddymer.integrity._stream_md5"
+    ) as md5_spy:
+        with pytest.raises(IntegrityError) as excinfo:
+            verify_teddymer_blob_integrity(
+                view_root=staged["out_dir"],
+                snapshot_path=staged["snapshot"],
+            )
+        assert md5_spy.call_count == 0
+
+    msg = str(excinfo.value)
+    assert old_version in msg
+    assert "teddymer_v1_blob_20260601_ffffffff" in msg
+
+
+def test_verify_integrity_fails_on_missing_view_config_in_snapshot_dir(tmp_path):
+    """If the labs-adjacent ``view_config.yaml`` is missing, the gate must
+    raise IntegrityError naming the missing file's path (R12)."""
+    from proteinfoundation.datasets.teddymer.integrity import IntegrityError
+
+    staged = _stage_blob_view(tmp_path)
+    snapshot_view = staged["snapshot"].parent / "view_config.yaml"
+    snapshot_view.unlink()
+
+    with pytest.raises(IntegrityError) as excinfo:
+        verify_teddymer_blob_integrity(
+            view_root=staged["out_dir"],
+            snapshot_path=staged["snapshot"],
+        )
+    assert str(snapshot_view) in str(excinfo.value)
 
 
 def _train_cfg_skeleton(integrity_block):

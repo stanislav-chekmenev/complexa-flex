@@ -157,7 +157,8 @@ def _read_member_bytes(src_fh, off: int, size: int) -> bytes:
         chunk = src_fh.read(min(remaining, _BLOB_READ_CHUNK))
         if not chunk:
             raise OSError(
-                f"short read at offset {off}: {size - remaining}/{size} bytes"
+                f"short read at offset {off}+{size - remaining}: "
+                f"got {size - remaining}/{size} bytes"
             )
         chunks.append(chunk)
         remaining -= len(chunk)
@@ -229,6 +230,9 @@ def repack(
 
             out_fh.flush()
             os.fsync(out_fh.fileno())
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     finally:
         if src_fh is not None:
             src_fh.close()
@@ -320,18 +324,6 @@ def write_md5_sidecar(
     )
 
 
-def parse_md5_sidecar(sidecar_path: Path) -> dict[str, str]:
-    """Inverse of `write_md5_sidecar`: returns ``{basename: hexdigest}``."""
-    out: dict[str, str] = {}
-    for ln in Path(sidecar_path).read_text().splitlines():
-        if not ln.strip():
-            continue
-        digest = ln[:32]
-        name = ln[34:]
-        out[name] = digest
-    return out
-
-
 def write_view_config(
     out_dir: Path,
     *,
@@ -376,7 +368,7 @@ def _acquire_lock(out_dir: Path):
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     lock_path = out_dir / ".build.lock"
-    lock_fh = open(lock_path, "wb")
+    lock_fh = open(lock_path, "ab")
     try:
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

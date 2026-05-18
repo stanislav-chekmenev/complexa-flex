@@ -21,6 +21,8 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,7 @@ _DEFAULT_FILES: tuple[str, ...] = (
     "dimers.parquet",
 )
 _DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024
+_VIEW_CONFIG_NAME = "view_config.yaml"
 
 
 class IntegrityError(RuntimeError):
@@ -45,6 +48,26 @@ def _stream_md5(path: Path, chunk_bytes: int = _DEFAULT_CHUNK_BYTES) -> str:
                 break
             h.update(buf)
     return h.hexdigest()
+
+
+def _read_view_config_version(view_config_path: Path) -> str:
+    """Load ``view_config.yaml`` and return its ``version`` string.
+
+    Raises ``IntegrityError`` if the file is missing or has no ``version``
+    key. Used by the cheap version-string fast-path in
+    ``verify_teddymer_blob_integrity`` (plan section 4.3 + R12).
+    """
+    view_config_path = Path(view_config_path)
+    if not view_config_path.exists():
+        raise IntegrityError(
+            f"Teddymer view_config.yaml missing: {view_config_path}"
+        )
+    cfg = yaml.safe_load(view_config_path.read_text())
+    if not isinstance(cfg, dict) or "version" not in cfg:
+        raise IntegrityError(
+            f"Teddymer view_config.yaml has no 'version' key: {view_config_path}"
+        )
+    return str(cfg["version"])
 
 
 def _parse_md5_sidecar(path: Path) -> dict[str, str]:
@@ -81,6 +104,20 @@ def verify_teddymer_blob_integrity(
 
     if not snapshot_path.exists():
         raise FileNotFoundError(f"Teddymer integrity snapshot missing: {snapshot_path}")
+
+    view_version = _read_view_config_version(view_root / _VIEW_CONFIG_NAME)
+    snapshot_version = _read_view_config_version(
+        snapshot_path.parent / _VIEW_CONFIG_NAME
+    )
+    if view_version != snapshot_version:
+        raise IntegrityError(
+            f"Teddymer view_config.yaml version mismatch: "
+            f"view {view_version!r} (at {view_root / _VIEW_CONFIG_NAME}) "
+            f"!= snapshot {snapshot_version!r} "
+            f"(at {snapshot_path.parent / _VIEW_CONFIG_NAME}). "
+            f"Re-run scripts/build_teddymer_blob.sbatch to refresh /netscratch."
+        )
+
     expected = _parse_md5_sidecar(snapshot_path)
 
     t0 = time.perf_counter()
@@ -110,7 +147,8 @@ def verify_teddymer_blob_integrity(
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "Teddymer blob integrity OK (verified %d files in %.1fs)",
+        "Teddymer blob integrity OK (version=%s, verified %d files in %.1fs)",
+        view_version,
         len(files),
         elapsed,
     )
