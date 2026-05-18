@@ -39,6 +39,16 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Composed config:\n{}", OmegaConf.to_yaml(cfg, resolve=True))
 
+    integrity_cfg = cfg.get("integrity", None)
+    if integrity_cfg is not None and bool(integrity_cfg.get("enabled", False)):
+        from proteinfoundation.datasets.teddymer.integrity import (
+            verify_teddymer_blob_integrity,
+        )
+        verify_teddymer_blob_integrity(
+            view_root=Path(integrity_cfg["view_root"]),
+            snapshot_path=Path(integrity_cfg["snapshot_path"]),
+        )
+
     head = build_confidence_head_from_cfg(cfg.confidence.head)
 
     training_cfg = cfg.training

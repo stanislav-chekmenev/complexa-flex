@@ -234,3 +234,8 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Ignore unused imports in __init__.py files
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_labs: requires /mnt/labs/... + /mnt/storage01/home/schekmenev/data/teddymer_v1/",
+]
