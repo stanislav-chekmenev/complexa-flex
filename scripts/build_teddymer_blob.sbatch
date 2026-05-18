@@ -21,10 +21,10 @@ echo "==========================================="
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
 
 # --- Inputs / outputs (overridable via env) ---
-LOCATOR="${TEDDYMER_LOCATOR:-/mnt/storage01/home/schekmenev/data/teddymer_v1/locator_rows.parquet}"
+LOCATOR="${TEDDYMER_LOCATOR:-/mnt/labs/shared/databases/afdb_v4_bulk/inventory_first/views/teddymer_v1/locator_rows.parquet}"
 LABS_ROOT="${AFDB_PROTEOMES:-/mnt/labs/shared/databases/afdb_v4_bulk/proteomes/v4}"
 OUT_DIR="${TEDDYMER_BLOB_OUT:-/netscratch/schekmenev/teddymer_v1_blob}"
-SNAPSHOT_PATH="${TEDDYMER_SNAPSHOT:-/mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5}"
+SNAPSHOT_PATH="${TEDDYMER_SNAPSHOT:-/mnt/labs/shared/databases/afdb_v4_bulk/inventory_first/views/teddymer_v1/data.md5}"
 
 mkdir -p "$PROJECT_ROOT/logs" "$OUT_DIR" "$(dirname "$SNAPSHOT_PATH")"
 

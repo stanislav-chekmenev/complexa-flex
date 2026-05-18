@@ -18,9 +18,17 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
-LABS_ROOT = Path("/mnt/labs/shared/databases/afdb_v4_bulk/proteomes/v4")
+LABS_ROOT = Path(
+    os.environ.get(
+        "TEDDYMER_LABS_ROOT",
+        "/mnt/labs/shared/databases/afdb_v4_bulk/proteomes/v4",
+    )
+)
 VIEW_LOCATOR = Path(
-    "/mnt/storage01/home/schekmenev/data/teddymer_v1/locator_rows.parquet"
+    os.environ.get(
+        "TEDDYMER_VIEW_LOCATOR",
+        "/mnt/labs/shared/databases/afdb_v4_bulk/inventory_first/views/teddymer_v1/locator_rows.parquet",
+    )
 )
 
 
