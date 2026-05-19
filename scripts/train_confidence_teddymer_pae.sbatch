@@ -156,6 +156,13 @@ export NCCL_P2P_DISABLE=1
 export NCCL_SHM_DISABLE=0
 export NCCL_ASYNC_ERROR_HANDLING=1
 
+# --- CUDA allocator: avoid fragmentation under reentrant ckpt + heterogeneous L ---
+# Pair-update layers (src/proteinfoundation/nn/modules/pair_update.py:82,88,105,107,110)
+# use reentrant torch.utils.checkpoint; the deep backward recompute fragments the
+# caching allocator across the 250-550 residue dimer-crop distribution. OOM at
+# step 927/63168 (job 53667) with 5.15 GiB reserved-but-unallocated was textbook.
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+
 cd "$PROJECT_ROOT"
 
 # --- Run training ---
