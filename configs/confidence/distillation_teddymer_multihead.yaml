@@ -15,7 +15,11 @@ defaults:
   - /nn/confidence/multi_head@confidence.head
   - /dataset/unified/teddymer_with_plddt_and_pae@data
   - /training/confidence_distill@training
+  - /logging/wandb@logging
   - _self_
+
+logging:
+  wandb_tags: ["plddt", "pae", "teddymer", "multi"]
 
 confidence:
   head:
