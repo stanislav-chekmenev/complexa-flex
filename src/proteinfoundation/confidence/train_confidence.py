@@ -29,7 +29,8 @@ from proteinfoundation.nn.confidence.registry import build_confidence_head_from_
 def _gate_loguru_to_rank0() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     node_rank = int(os.environ.get("NODE_RANK", "0"))
-    if local_rank != 0 or node_rank != 0:
+    global_rank = int(os.environ.get("RANK", "0"))
+    if local_rank != 0 or node_rank != 0 or global_rank != 0:
         logger.remove()
 
 

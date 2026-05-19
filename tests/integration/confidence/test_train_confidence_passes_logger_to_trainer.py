@@ -146,8 +146,6 @@ def test_log_hyperparams_not_called_when_disabled(monkeypatch: pytest.MonkeyPatc
 
     import proteinfoundation.confidence.train_confidence as tc
 
-    sentinel = MagicMock(spec=WandbLogger)
-
     with patch.object(tc, "build_confidence_head_from_cfg", return_value=MagicMock()), patch.object(
         tc, "ConfidenceDistillationModule", return_value=MagicMock()
     ), patch.object(tc.hydra.utils, "instantiate", return_value=trainer_mock), patch.object(
@@ -156,4 +154,6 @@ def test_log_hyperparams_not_called_when_disabled(monkeypatch: pytest.MonkeyPatc
         tc.main.__wrapped__(cfg)
 
     assert build_mock.call_count == 1
-    assert sentinel.log_hyperparams.call_count == 0
+    trainer_mock.fit.assert_called_once()
+    fit_kwargs = trainer_mock.fit.call_args.kwargs
+    assert "datamodule" in fit_kwargs
