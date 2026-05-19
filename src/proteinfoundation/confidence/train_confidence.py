@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 import hydra
 import lightning as L
 import torch
+from lightning.pytorch.loggers import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -24,8 +26,31 @@ from proteinfoundation.confidence.lightning_module import ConfidenceDistillation
 from proteinfoundation.nn.confidence.registry import build_confidence_head_from_cfg
 
 
-def _build_trainer(cfg: DictConfig) -> L.Trainer:
-    return hydra.utils.instantiate(cfg.trainer, _convert_="partial")
+def _gate_loguru_to_rank0() -> None:
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    node_rank = int(os.environ.get("NODE_RANK", "0"))
+    if local_rank != 0 or node_rank != 0:
+        logger.remove()
+
+
+def _build_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
+    log_cfg = cfg.get("logging", None)
+    if log_cfg is None or not bool(log_cfg.get("log_wandb", False)):
+        return None
+    if os.environ.get("WANDB_MODE", "").lower() == "disabled":
+        return None
+    return WandbLogger(
+        project=log_cfg["wandb_project"],
+        id=cfg.run_name,
+        name=cfg.run_name,
+        entity=log_cfg.get("wandb_entity", None),
+        group=log_cfg.get("wandb_group", None),
+        tags=list(log_cfg.get("wandb_tags", []) or []),
+    )
+
+
+def _build_trainer(cfg: DictConfig, *, logger: Optional[WandbLogger]) -> L.Trainer:
+    return hydra.utils.instantiate(cfg.trainer, logger=logger, _convert_="partial")
 
 
 @hydra.main(
@@ -34,6 +59,8 @@ def _build_trainer(cfg: DictConfig) -> L.Trainer:
     version_base="1.3",
 )
 def main(cfg: DictConfig) -> None:
+    _gate_loguru_to_rank0()
+
     seed = int(cfg.get("seed", 42))
     L.seed_everything(seed, workers=True)
 
@@ -76,7 +103,14 @@ def main(cfg: DictConfig) -> None:
 
     datamodule = hydra.utils.instantiate(cfg.data.datamodule)
 
-    trainer = _build_trainer(cfg)
+    wandb_logger = _build_wandb_logger(cfg)
+    trainer = _build_trainer(cfg, logger=wandb_logger)
+
+    if wandb_logger is not None and trainer.is_global_zero:
+        wandb_logger.log_hyperparams(
+            {"config": OmegaConf.to_container(cfg, resolve=True)}
+        )
+
     trainer.fit(module, datamodule=datamodule)
 
 
