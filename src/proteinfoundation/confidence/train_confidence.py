@@ -12,6 +12,7 @@ commonly, `srun python -m proteinfoundation.confidence.train_confidence
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -34,7 +35,37 @@ def _gate_loguru_to_rank0() -> None:
         logger.remove()
 
 
-def _build_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
+_FORK_ID_ENV = "COMPLEXA_RUN_FORK_ID"
+
+
+def _resolve_run_identity(cfg: DictConfig) -> tuple[str, str]:
+    """Resolve `(wandb_id, wandb_name)` from the composed config.
+
+    Default: fork — append a fresh 8-char suffix to `run_name` so each launch
+    gets a distinct WandB run. The suffix must be identical across DDP ranks
+    (each `srun` rank is a separate Python process); precedence:
+      1. `COMPLEXA_RUN_FORK_ID` env var (explicit override; also lets a parent
+         process mint once and broadcast),
+      2. `SLURM_JOB_ID` (set identically across all ranks of the same job),
+      3. `secrets.token_hex(4)` (single-rank dev fallback).
+    Resume: if `cfg.resume_id` is set, use it verbatim as the WandB id (and
+    keep `run_name` as the display name) — re-enters the existing run's
+    history.
+    """
+    base_name = str(cfg.run_name)
+    resume_id = cfg.get("resume_id", None)
+    if resume_id:
+        return str(resume_id), base_name
+
+    suffix = os.environ.get(_FORK_ID_ENV)
+    if not suffix:
+        slurm_job_id = os.environ.get("SLURM_JOB_ID")
+        suffix = slurm_job_id if slurm_job_id else secrets.token_hex(4)
+    forked = f"{base_name}-{suffix}"
+    return forked, forked
+
+
+def _build_wandb_logger(cfg: DictConfig, *, wandb_id: str, wandb_name: str) -> Optional[WandbLogger]:
     log_cfg = cfg.get("logging", None)
     if log_cfg is None or not bool(log_cfg.get("log_wandb", False)):
         return None
@@ -42,8 +73,8 @@ def _build_wandb_logger(cfg: DictConfig) -> Optional[WandbLogger]:
         return None
     return WandbLogger(
         project=log_cfg["wandb_project"],
-        id=cfg.run_name,
-        name=cfg.run_name,
+        id=wandb_id,
+        name=wandb_name,
         entity=log_cfg.get("wandb_entity", None),
         group=log_cfg.get("wandb_group", None),
         tags=list(log_cfg.get("wandb_tags", []) or []),
@@ -104,7 +135,8 @@ def main(cfg: DictConfig) -> None:
 
     datamodule = hydra.utils.instantiate(cfg.data.datamodule)
 
-    wandb_logger = _build_wandb_logger(cfg)
+    wandb_id, wandb_name = _resolve_run_identity(cfg)
+    wandb_logger = _build_wandb_logger(cfg, wandb_id=wandb_id, wandb_name=wandb_name)
     trainer = _build_trainer(cfg, logger=wandb_logger)
 
     if wandb_logger is not None and trainer.is_global_zero:

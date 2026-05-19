@@ -44,6 +44,7 @@ data:
 
 seed: 42
 run_name: "plddt-distill-swissprot"
+resume_id: null
 
 integrity:
   enabled: false
