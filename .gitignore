@@ -38,6 +38,7 @@ env.sh
 .uv-cache
 .venv
 venv/
+venv.tar.gz
 **.egg-info
 **.ipynb_checkpoints/
 .vscode/

@@ -14,6 +14,6 @@ loss:
   ce_weight: 0.9
   smooth_l1_weight: 0.1
   label_smoothing: 0.05
-max_epochs: 50
+max_epochs: 25
 precision: bf16-mixed
 gradient_clip_val: 1.0
