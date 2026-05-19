@@ -135,7 +135,6 @@ echo "Starting reward-head distillation..."
 srun --kill-on-bad-exit uv run python -m proteinfoundation.confidence.train_confidence \
     --config-name=confidence/distillation_swissprot \
     trainer.devices=$NUM_DEVICES \
-    trainer.strategy=ddp_find_unused_parameters_false \
     trainer.precision=bf16-mixed
 
 # --- Rsync run dir back to project ---
