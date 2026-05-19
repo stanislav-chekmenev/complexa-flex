@@ -6,7 +6,11 @@ defaults:
   - /nn/confidence/plddt_sequence_only_head@confidence.head
   - /dataset/unified/afdb_monomers_with_plddt@data
   - /training/confidence_distill@training
+  - /logging/wandb@logging
   - _self_
+
+logging:
+  wandb_tags: ["plddt", "swissprot", "control"]
 
 trainer:
   _target_: lightning.pytorch.Trainer

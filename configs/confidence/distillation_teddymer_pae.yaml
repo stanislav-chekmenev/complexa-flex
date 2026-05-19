@@ -17,7 +17,11 @@ defaults:
   - /nn/confidence/pae_head@confidence.head
   - /dataset/unified/teddymer_with_plddt_and_pae@data
   - /training/confidence_distill@training
+  - /logging/wandb@logging
   - _self_
+
+logging:
+  wandb_tags: ["pae", "teddymer"]
 
 trainer:
   _target_: lightning.pytorch.Trainer

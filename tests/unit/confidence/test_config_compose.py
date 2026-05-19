@@ -46,3 +46,25 @@ def test_loss_defaults_round_two() -> None:
     assert cfg.training.loss.ce_weight == 0.9
     assert cfg.training.loss.smooth_l1_weight == 0.1
     assert cfg.training.loss.label_smoothing == 0.05
+
+
+_EXPECTED_TAGS = {
+    "confidence/distillation_swissprot": ["plddt", "swissprot"],
+    "confidence/distillation_swissprot_control": ["plddt", "swissprot", "control"],
+    "confidence/distillation_teddymer_pae": ["pae", "teddymer"],
+    "confidence/distillation_teddymer_multihead": ["plddt", "pae", "teddymer", "multi"],
+}
+
+
+def test_logging_block_composed_for_all_confidence_runs() -> None:
+    import os
+
+    os.environ.setdefault("DATA_PATH", "/tmp")
+    for config_name, expected_tags in _EXPECTED_TAGS.items():
+        with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base="1.3"):
+            cfg = compose(config_name=config_name)
+
+        assert cfg.logging.log_wandb is True, config_name
+        assert cfg.logging.wandb_project == "confidence-distillation", config_name
+        assert list(cfg.logging.wandb_tags) == expected_tags, config_name
+        assert cfg.run_name, f"{config_name}: run_name must be non-empty for wandb_id"
