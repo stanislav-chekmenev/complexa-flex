@@ -2,7 +2,7 @@ trunk:
   _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
   token_dim: 768
   pair_repr_dim: 256
-  n_blocks: 4
+  n_blocks: 2
   n_heads: 16
   dim_cond: 256
   use_tri_mult: True
