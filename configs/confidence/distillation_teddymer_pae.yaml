@@ -17,13 +17,20 @@ defaults:
   - /nn/confidence/pae_head@confidence.head
   - /dataset/unified/teddymer_with_plddt_and_pae@data
   - /training/confidence_distill@training
+  - /logging/wandb@logging
   - _self_
+
+logging:
+  wandb_tags: ["pae", "teddymer"]
 
 trainer:
   _target_: lightning.pytorch.Trainer
   accelerator: gpu
   devices: 1
-  strategy: ddp_find_unused_parameters_false
+  strategy:
+    _target_: lightning.pytorch.strategies.DDPStrategy
+    find_unused_parameters: true
+    static_graph: true
   precision: ${training.precision}
   max_epochs: ${training.max_epochs}
   gradient_clip_val: ${training.gradient_clip_val}

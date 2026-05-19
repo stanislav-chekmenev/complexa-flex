@@ -25,6 +25,14 @@ PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
 NUM_DEVICES=2
 DEVICE_TYPE=h100nvl
 
+# --- Source project env (uses PROJECT_ROOT) ---
+# env.sh sources .env (gitignored) and re-exports active tool paths.
+# WANDB_ENTITY is read by configs/logging/wandb.yaml via oc.env: resolution;
+# WANDB_API_KEY must NOT be present in .env — ~/.netrc (mode 600, readable
+# from compute nodes) is the only credential source. The unconditional
+# unset below is defence-in-depth.
+source "$PROJECT_ROOT/env.sh"
+
 if [ "$DEVICE_TYPE" == "rtx6000" ] || [ "$DEVICE_TYPE" == "h100nvl" ]; then
     DATA_ROOT="/netscratch/$USER/complexa-paedistill"
 else
@@ -133,6 +141,14 @@ echo "  Run dir:      $RUN_DIR"
 echo "  GPUs:         ${NUM_DEVICES}x $DEVICE_TYPE"
 echo ""
 
+# --- WandB auth ---
+# Credential source: ~/.netrc (mode 600 on labs home, readable from
+# compute nodes). WANDB_API_KEY in .env or the SLURM env is a footgun
+# (placeholder string, partial key from a stale paste, or stale value
+# from a previous shell). Strip it unconditionally so wandb falls back
+# to ~/.netrc cleanly.
+unset WANDB_API_KEY
+
 # --- NCCL tuning ---
 export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1
@@ -146,10 +162,9 @@ cd "$PROJECT_ROOT"
 # torch.compile is OFF by default (Teddymer dimers are heterogeneously
 # cropped; dynamic-L recompile storm risk — see plan §11 abort criterion).
 echo "Starting PAE confidence-head distillation..."
-srun --kill-on-bad-exit "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
+srun --kill-on-bad-exit /usr/bin/env -u WANDB_API_KEY "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
     --config-name=confidence/distillation_teddymer_pae \
     trainer.devices=$NUM_DEVICES \
-    trainer.strategy=ddp_find_unused_parameters_false \
     trainer.precision=bf16-mixed
 
 # --- Rsync run dir back to project ---
