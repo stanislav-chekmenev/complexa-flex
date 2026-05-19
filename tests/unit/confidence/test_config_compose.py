@@ -36,9 +36,24 @@ def test_dead_keys_dropped() -> None:
     assert "enabled" not in confidence
 
 
-def test_ddp_strategy_declared() -> None:
-    cfg = _compose_distillation_cfg()
-    assert cfg.trainer.strategy == "ddp_find_unused_parameters_false"
+def test_ddp_strategy_block_instantiates_for_all_confidence_runs() -> None:
+    import os
+
+    import hydra
+    from lightning.pytorch.strategies import DDPStrategy
+
+    os.environ.setdefault("DATA_PATH", "/tmp")
+    for config_name in _EXPECTED_TAGS:
+        with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base="1.3"):
+            cfg = compose(config_name=config_name)
+        assert (
+            cfg.trainer.strategy._target_
+            == "lightning.pytorch.strategies.DDPStrategy"
+        ), config_name
+        assert cfg.trainer.strategy.find_unused_parameters is True, config_name
+        assert cfg.trainer.strategy.static_graph is True, config_name
+        strategy = hydra.utils.instantiate(cfg.trainer.strategy)
+        assert isinstance(strategy, DDPStrategy), config_name
 
 
 def test_loss_defaults_round_two() -> None:

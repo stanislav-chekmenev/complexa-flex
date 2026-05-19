@@ -157,9 +157,9 @@ class PaeHead(BaseConfidenceHead):
             "loss": total,
             "loss_ce": parts["loss_ce"],
             "loss_smooth_l1": parts["loss_smooth_l1"],
-            "loss_total": total,
         }
         if stage != "train":
+            log_dict["loss_total"] = total
             log_dict["pae_accuracy"] = pae_accuracy(logits, labels_bin, mask_eff)
             log_dict["pae_mae"] = pae_mae(logits, labels_bin, mask_eff, centers)
             pred_cont = _logits_to_continuous(logits, centers)

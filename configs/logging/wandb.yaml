@@ -1,6 +1,6 @@
 # @package _global_
 log_wandb: true
 wandb_project: confidence-distillation
-wandb_entity: null
+wandb_entity: ${oc.env:WANDB_ENTITY,null}
 wandb_group: null
 wandb_tags: []

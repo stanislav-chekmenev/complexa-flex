@@ -98,3 +98,31 @@ def test_uniform_logits_expected_value_is_midpoint() -> None:
     ev = head.logits_to_expected_value(logits)
     assert ev.shape == (B, N, N)
     assert torch.allclose(ev, torch.full_like(ev, 16.0), atol=1e-4)
+
+
+def _make_loss_batch(b: int = B, n: int = N, seed: int = 1) -> dict[str, torch.Tensor]:
+    g = torch.Generator().manual_seed(seed)
+    return {
+        "pae_bin": torch.randint(0, NUM_PAE_BINS, (b, n, n), generator=g),
+        "pae_residue_pair": torch.rand(b, n, n, generator=g) * 31.75,
+    }
+
+
+def test_loss_total_emitted_only_outside_train_stage() -> None:
+    """Train-time log_dict must NOT carry `loss_total` (would duplicate `loss`)."""
+    head = _make_head().eval()
+    s, z, mask, _ = _make_inputs(seed=2)
+    out = head._predict(s, z, mask)
+    mask_eff = (mask[:, None, :] & mask[:, :, None]).to(torch.float32)
+    batch = _make_loss_batch()
+
+    _, train_log = head.compute_loss_and_metrics(out, batch, mask_eff, stage="train")
+    assert "loss" in train_log
+    assert "loss_total" not in train_log, (
+        "loss_total at train time duplicates `loss` and pollutes wandb step-keys"
+    )
+
+    _, val_log = head.compute_loss_and_metrics(out, batch, mask_eff, stage="val")
+    assert "loss" in val_log
+    assert "loss_total" in val_log
+    assert torch.equal(val_log["loss"], val_log["loss_total"])

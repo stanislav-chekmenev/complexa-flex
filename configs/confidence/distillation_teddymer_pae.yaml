@@ -27,12 +27,16 @@ trainer:
   _target_: lightning.pytorch.Trainer
   accelerator: gpu
   devices: 1
-  strategy: ddp_find_unused_parameters_false
+  strategy:
+    _target_: lightning.pytorch.strategies.DDPStrategy
+    find_unused_parameters: true
+    static_graph: true
   precision: ${training.precision}
   max_epochs: ${training.max_epochs}
   gradient_clip_val: ${training.gradient_clip_val}
   log_every_n_steps: 25
   check_val_every_n_epoch: 1
+  val_check_interval: 2000
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
       monitor: "val/pae/loss_ce"
