@@ -57,6 +57,7 @@ data:
 seed: 42
 run_name: "pae-distill-teddymer"
 resume_id: null
+resume_ckpt_path: null
 
 integrity:
   enabled: true

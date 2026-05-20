@@ -45,6 +45,7 @@ data:
 seed: 42
 run_name: "plddt-distill-swissprot-control"
 resume_id: null
+resume_ckpt_path: null
 
 integrity:
   enabled: false
