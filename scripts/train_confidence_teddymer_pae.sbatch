@@ -169,10 +169,18 @@ cd "$PROJECT_ROOT"
 # torch.compile is OFF by default (Teddymer dimers are heterogeneously
 # cropped; dynamic-L recompile storm risk — see plan §11 abort criterion).
 echo "Starting PAE confidence-head distillation..."
+RESUME_CKPT_PATH="${RESUME_CKPT_PATH:-}"
+EXTRA_OVERRIDES=()
+if [ -n "$RESUME_CKPT_PATH" ]; then
+    echo "Resuming from ckpt: $RESUME_CKPT_PATH"
+    EXTRA_OVERRIDES+=("resume_ckpt_path=$RESUME_CKPT_PATH")
+fi
+
 srun --kill-on-bad-exit /usr/bin/env -u WANDB_API_KEY "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
     --config-name=confidence/distillation_teddymer_pae \
     trainer.devices=$NUM_DEVICES \
-    trainer.precision=bf16-mixed
+    trainer.precision=bf16-mixed \
+    "${EXTRA_OVERRIDES[@]}"
 
 # --- Rsync run dir back to project ---
 echo "Syncing run dir back to project..."
