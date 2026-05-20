@@ -144,7 +144,10 @@ def main(cfg: DictConfig) -> None:
             {"config": OmegaConf.to_container(cfg, resolve=True)}
         )
 
-    trainer.fit(module, datamodule=datamodule)
+    resume_ckpt_path = cfg.get("resume_ckpt_path", None)
+    if resume_ckpt_path is not None:
+        logger.info("Resuming trainer state from {}", resume_ckpt_path)
+    trainer.fit(module, datamodule=datamodule, ckpt_path=resume_ckpt_path)
 
 
 if __name__ == "__main__":
