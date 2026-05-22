@@ -118,9 +118,11 @@ def test_log_hyperparams_called_on_rank0_when_enabled(monkeypatch: pytest.Monkey
 
     captured = {}
 
-    def _capture_build_wandb_logger(cfg_in):
+    def _capture_build_wandb_logger(cfg_in, *, wandb_id, wandb_name):
         wl = MagicMock(spec=WandbLogger)
         captured["wl"] = wl
+        captured["wandb_id"] = wandb_id
+        captured["wandb_name"] = wandb_name
         return wl
 
     with patch.object(tc, "build_confidence_head_from_cfg", return_value=MagicMock()), patch.object(
