@@ -8,7 +8,7 @@ pair_repr_dim: 256
 num_pae_bins: 64
 bin_min: 0.0
 bin_max: 32.0
-ce_weight: 0.9
-ev_weight: 0.1
+ce_weight: 0.8
+ev_weight: 0.2
 label_smoothing: 0.0
 num_bins_ece_adaptive: 15

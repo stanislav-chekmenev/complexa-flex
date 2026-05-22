@@ -38,6 +38,7 @@ The full frozen trunk is currently persisted into the Lightning checkpoint
 
 from __future__ import annotations
 
+import math
 import warnings
 from pathlib import Path
 from typing import Iterable
@@ -73,6 +74,24 @@ def _autodetect_cond_modalities(cond_factory: nn.Module) -> tuple[str, ...]:
     if not modalities:
         return ("bb_ca",)
     return tuple(modalities)
+
+
+def _cosine_warmup_factor(
+    step: int,
+    warmup_steps: int,
+    total_steps: int | None,
+    min_factor: float,
+) -> float:
+    if step < warmup_steps:
+        return step / max(warmup_steps, 1)
+    if total_steps is None or total_steps <= 0:
+        return 1.0
+    decay_steps = total_steps - warmup_steps
+    if decay_steps <= 0:
+        return 1.0
+    progress = min(max((step - warmup_steps) / decay_steps, 0.0), 1.0)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return min_factor + (1.0 - min_factor) * cosine
 
 
 class ConfidenceDistillationModule(L.LightningModule):
@@ -489,17 +508,18 @@ class ConfidenceDistillationModule(L.LightningModule):
         }
 
     def _lr_lambda(self, step: int) -> float:
-        if step < self.warmup_steps:
-            return step / max(self.warmup_steps, 1)
-        total_steps = getattr(self.trainer, "estimated_stepping_batches", None) if self.trainer is not None else None
-        if total_steps is None or total_steps <= 0:
-            return 1.0
-        decay_steps = total_steps - self.warmup_steps
-        if decay_steps <= 0:
-            return 1.0
-        progress = (step - self.warmup_steps) / decay_steps
+        total_steps = (
+            getattr(self.trainer, "estimated_stepping_batches", None)
+            if self.trainer is not None
+            else None
+        )
         min_factor = self.min_lr / self.lr if self.lr > 0 else 0.0
-        return max(1.0 - progress * (1.0 - min_factor), min_factor)
+        return _cosine_warmup_factor(
+            step=step,
+            warmup_steps=self.warmup_steps,
+            total_steps=total_steps,
+            min_factor=min_factor,
+        )
 
     def on_train_epoch_start(self) -> None:
         self.proteina.eval()

@@ -8,9 +8,9 @@
 # the EV of a one-hot integer-A label is biased `+0.25 A` high relative
 # to the true integer-A value. The SmoothL1 EV term consumes the float-A
 # label `pae_residue_pair` and cancels its share of the bias at training
-# time. At the default `0.9 * CE + 0.1 * SmoothL1` split, the
-# stationary-point EV is `0.9 * (k + 0.25) + 0.1 * k = k + 0.225`, so the
-# residual model bias on validation MAE is approximately `+0.225 A` —
+# time. At the current `0.8 * CE + 0.2 * SmoothL1` split, the
+# stationary-point EV is `0.8 * (k + 0.25) + 0.2 * k = k + 0.20`, so the
+# residual model bias on validation MAE is approximately `+0.20 A` —
 # still well within the AFDB label noise floor.
 
 defaults:
@@ -47,7 +47,9 @@ trainer:
     - _target_: lightning.pytorch.callbacks.EarlyStopping
       monitor: "val/pae/loss_ce"
       mode: "min"
-      patience: 10
+      patience: 20
+      min_delta: 1.0e-3
+      verbose: true
 
 data:
   datamodule:
