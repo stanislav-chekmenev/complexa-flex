@@ -35,10 +35,14 @@ def test_build_wandb_logger_returns_wandb_logger_with_expected_fields(
     )
 
     with patch("wandb.init"):
-        wandb_logger = _build_wandb_logger(cfg)
+        wandb_logger = _build_wandb_logger(
+            cfg,
+            wandb_id="pae-distill-teddymer-abc123",
+            wandb_name="pae-distill-teddymer-abc123",
+        )
 
     assert isinstance(wandb_logger, WandbLogger)
     assert wandb_logger._project == "confidence-distillation"
-    assert wandb_logger._id == "pae-distill-teddymer"
-    assert wandb_logger._name == "pae-distill-teddymer"
+    assert wandb_logger._id == "pae-distill-teddymer-abc123"
+    assert wandb_logger._name == "pae-distill-teddymer-abc123"
     assert wandb_logger._wandb_init["tags"] == ["pae", "teddymer"]

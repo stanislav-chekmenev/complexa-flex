@@ -30,7 +30,7 @@ def test_returns_none_when_log_wandb_false(monkeypatch: pytest.MonkeyPatch) -> N
         }
     )
 
-    assert _build_wandb_logger(cfg) is None
+    assert _build_wandb_logger(cfg, wandb_id="dummy", wandb_name="dummy") is None
 
 
 def test_returns_none_when_wandb_mode_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,7 +51,7 @@ def test_returns_none_when_wandb_mode_disabled(monkeypatch: pytest.MonkeyPatch) 
         }
     )
 
-    assert _build_wandb_logger(cfg) is None
+    assert _build_wandb_logger(cfg, wandb_id="dummy", wandb_name="dummy") is None
 
 
 def test_returns_none_when_logging_block_absent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,4 +61,4 @@ def test_returns_none_when_logging_block_absent(monkeypatch: pytest.MonkeyPatch)
 
     cfg = OmegaConf.create({"run_name": "no-logging-block"})
 
-    assert _build_wandb_logger(cfg) is None
+    assert _build_wandb_logger(cfg, wandb_id="dummy", wandb_name="dummy") is None
