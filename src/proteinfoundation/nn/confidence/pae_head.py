@@ -36,6 +36,12 @@ from proteinfoundation.nn.confidence._losses import combined_pae_loss
 from proteinfoundation.nn.confidence._metrics import (
     _labels_to_continuous,
     _logits_to_continuous,
+    i_pae,
+    interface_pair_mask,
+    ipsae_family,
+    iptm_energy_from_logits,
+    iptm_from_logits,
+    min_ipae,
     pae_accuracy,
     pae_ece,
     pae_ece_adaptive,
@@ -179,6 +185,18 @@ class PaeHead(BaseConfidenceHead):
                     pae_mae_stratified_by_distance(
                         logits, labels_bin, mask_eff, centers, ca_coords
                     )
+                )
+            chain_idx = batch.get("chain_idx")
+            if chain_idx is not None and torch.is_tensor(chain_idx):
+                inter = interface_pair_mask(chain_idx, mask_eff)
+                log_dict["i_pae"] = i_pae(logits, inter, centers)
+                log_dict["min_ipae"] = min_ipae(logits, inter, centers)
+                log_dict["i_ptm"] = iptm_from_logits(logits, mask_eff, inter, centers)
+                log_dict["i_ptm_energy"] = iptm_energy_from_logits(
+                    logits, mask_eff, inter, centers
+                )
+                log_dict.update(
+                    ipsae_family(logits, mask_eff, inter, centers, ca_coords)
                 )
         return total, log_dict
 
