@@ -21,8 +21,29 @@ datamodule:
   pin_memory: true
   seed: 0
 
+  # The supervised pool is filtered by geometry only — not by predicted
+  # confidence. The legacy Complexa-paper cut
+  # `interface_length >= 10 AND avg_int_plddt > 70 AND avg_int_pae < 10`
+  # (baked into the `complexa_filter` boolean column on dimers.parquet) is
+  # a selection-bias antipattern for confidence-head distillation: the
+  # head's target is per-residue pLDDT / per-pair PAE, and filtering the
+  # training set by an aggregate of those same quantities truncates the
+  # label distribution by the label itself, compressing the head's logits
+  # into the trained range and miscalibrating it outside. AF2-multimer,
+  # Boltz-1/-2, and Chai-1 filter their confidence-head training sets on
+  # data-source quality axes (resolution, sequence-identity clustering,
+  # homology) but never on the model's own confidence outputs; Boltz-2
+  # (Wohlwend 2025) calls this out by name. We mirror that:
+  # `interface_length > 10` filters by geometry (independent of the AF2
+  # confidence map), keeps the minimum-interface-size sanity floor, and
+  # admits 562,089 of the 587,687 dimers (95.64%, +51,635 vs the legacy
+  # boolean — exactly the low-confidence-interface subset the legacy cut
+  # was throwing away). The `avg_int_plddt` / `avg_int_pae` columns are
+  # available on dimers.parquet if a future blob needs a geometry-
+  # orthogonal cut, but they should not be used to gate on the head's
+  # own target quantity.
   filters:
-    - "complexa_filter == True"
+    - "interface_length > 10"
 
   atomarray_transforms: []
 

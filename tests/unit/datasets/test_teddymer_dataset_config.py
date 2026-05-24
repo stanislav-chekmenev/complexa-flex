@@ -1,19 +1,21 @@
-"""Red-phase tests for ``configs/dataset/unified/teddymer_with_plddt_and_pae.yaml``
-and the new ``TeddymerDimerDataModule``.
+"""Tests for ``configs/dataset/unified/teddymer_with_plddt_and_pae.yaml``
+and the ``TeddymerDimerDataModule``.
 
-The config is the Hydra entry-point that ties together the parquet view at
-``/mnt/storage01/home/schekmenev/data/teddymer_v1/`` and the new transforms.
-This test composes the config against ``tmp_path`` fixtures, instantiates
-the datamodule, and pulls one batch from the train dataloader to confirm
-the dataset-level ``complexa_filter == True`` filter binds, that the
-expected fields land on the batch, and that variable-length dimers pad
-correctly.
+The config is the Hydra entry-point that ties together the Teddymer parquet
+view (canonical runtime location ``/netscratch/schekmenev/teddymer_v1_blob/``;
+labs NFS ``~/data/teddymer_v1/`` holds only the integrity-gate metadata) and
+the AFDB-label transforms. The tests compose the config against ``tmp_path``
+fixtures, instantiate the datamodule, pin the YAML filter contract
+(geometry-only, ``interface_length > 10``), and pull one batch from the
+train dataloader to confirm the expected fields land on the batch and that
+variable-length dimers pad correctly.
 
-Spec: docs/superpowers/plans/2026-05-17_pr_a_teddymer_data_plumbing.md §9 Test 3.
-Failure mode (red phase): Hydra ``Could not resolve`` / ``InstantiationException``
-for ``proteinfoundation.datasets.teddymer.dataset.TeddymerDimerDataModule``,
-or ``FileNotFoundError`` on ``teddymer_with_plddt_and_pae.yaml`` while the
-config itself does not yet exist.
+The filter is geometry-only by design: filtering training rows by an
+aggregate of the head's own predicted quantity (``avg_int_plddt`` /
+``avg_int_pae``) is a selection-bias antipattern that miscalibrates the
+confidence head outside the trained range. ``test_yaml_filter_pins_*``
+locks the contract so a future edit cannot silently re-introduce a
+confidence-based cut.
 """
 
 from __future__ import annotations
@@ -40,8 +42,14 @@ CONFIG_DIR = REPO_ROOT / "configs"
 
 
 def _build_view(tmp_path: Path):
-    """Build a 4-dimer fake view: 2 parents x 2 chains each = 8 locator rows,
-    with exactly 3 of the 4 dimers having ``complexa_filter == True``.
+    """Build a 4-dimer fake view: 2 parents x 2 chains each = 8 locator rows.
+
+    Under the current geometry-only filter (``interface_length > 10``) exactly
+    two dimers pass — D1 (il=12) and D2 (il=15); D3 (il=8) and D4 (il=5) are
+    dropped. The legacy ``complexa_filter`` boolean column is still emitted
+    on the synthetic parquet (three of the four rows are True) for
+    schema-compatibility with the real dimers.parquet, but the runtime
+    filter no longer reads it.
     """
     n_full = 12
     matrix = np.zeros((n_full, n_full), dtype=np.int64)
@@ -138,7 +146,19 @@ def test_config_composes_and_instantiates_datamodule(tmp_path):
     assert dm.__class__.__name__ == "TeddymerDimerDataModule"
 
 
-def test_complexa_filter_drops_the_one_false_row(tmp_path):
+def test_geometry_only_filter_drops_only_small_interfaces(tmp_path):
+    """The YAML filter is geometry-only: ``interface_length > 10``.
+
+    Against the 4-dimer fake fixture (D1 il=12, D2 il=15, D3 il=8, D4 il=5),
+    only D1 and D2 pass — D3 and D4 are dropped on the interface-length cut.
+    D1/D2's pLDDT and PAE are not gated; the head must see the full confidence
+    range present in the blob, since filtering by an aggregate of the head's
+    own predicted quantity is a selection-bias antipattern that miscalibrates
+    the head outside the trained range (AF2-multimer, Boltz-1/-2, and Chai-1
+    all filter their confidence-head training sets on data-source quality
+    axes — resolution, clustering, homology — but never on the model's own
+    confidence outputs).
+    """
     dimers_path, locator_path = _build_view(tmp_path)
     cfg = _compose_cfg(dimers_path, locator_path, tmp_path)
 
@@ -147,7 +167,28 @@ def test_complexa_filter_drops_the_one_false_row(tmp_path):
 
     n_train = len(dm.train_dataset)
     n_val = len(dm.val_dataset)
-    assert n_train + n_val == 3
+    assert n_train + n_val == 2
+
+
+def test_yaml_filter_pins_geometry_only_threshold():
+    """Pin the YAML filter contract so a future edit can't silently re-introduce
+    a confidence-based cut. The confidence head trains on the full pLDDT / PAE
+    range; only ``interface_length`` may gate the supervised pool.
+    """
+    with initialize_config_dir(
+        config_dir=str(CONFIG_DIR / "dataset" / "unified"), version_base="1.3"
+    ):
+        cfg = compose(config_name="teddymer_with_plddt_and_pae")
+
+    filters = list(cfg.datamodule.filters)
+    assert filters == [
+        "interface_length > 10",
+    ], (
+        f"Teddymer confidence-distill filter contract drifted. Got {filters}. "
+        "The supervised pool must be filtered by geometry only (interface_length); "
+        "filtering by avg_int_plddt or avg_int_pae truncates the label distribution "
+        "by the head's own target quantity and miscalibrates downstream ranking."
+    )
 
 
 def test_one_train_batch_has_expected_fields_and_dtypes(tmp_path):
