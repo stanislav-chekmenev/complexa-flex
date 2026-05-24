@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import torch
 
-from proteinfoundation.nn.confidence._metrics import interface_pair_mask, min_ipae
+from proteinfoundation.nn.confidence._metrics import (
+    _logits_to_continuous,
+    interface_pair_mask,
+    min_ipae,
+)
 
 
 NUM_BINS = 64
@@ -40,7 +44,8 @@ def test_min_over_interface_rows_picks_smallest_row_ev() -> None:
     mask_eff = torch.ones(1, 4, 4, dtype=torch.float32)
     inter = interface_pair_mask(chain_idx, mask_eff)
     logits = _logits_with_per_row_target([4.75, 4.75, 0.75, 4.75], chain_idx)
-    out = min_ipae(logits, inter, centers)
+    pae_ev = _logits_to_continuous(logits, centers)
+    out = min_ipae(pae_ev, inter)
     assert abs(out.item() - 0.75) < 1e-5
 
 
@@ -51,7 +56,8 @@ def test_empty_mask_returns_zero_without_nan() -> None:
     inter = interface_pair_mask(chain_idx, mask_eff)
 
     logits = torch.randn(1, 4, 4, NUM_BINS)
-    out = min_ipae(logits, inter, centers)
+    pae_ev = _logits_to_continuous(logits, centers)
+    out = min_ipae(pae_ev, inter)
     assert torch.isfinite(out)
     assert out.item() == 0.0
 
@@ -65,6 +71,7 @@ def test_batch_averages_per_sample_mins() -> None:
     logits = torch.full((2, 4, 4, NUM_BINS), -1e9)
     logits[0] = _logits_with_per_row_target([4.75, 4.75, 0.75, 4.75], torch.tensor([[0, 0, 1, 1]]))[0]
     logits[1] = _logits_with_per_row_target([2.25, 2.25, 2.25, 2.25], torch.tensor([[0, 0, 1, 1]]))[0]
-    out = min_ipae(logits, inter, centers)
+    pae_ev = _logits_to_continuous(logits, centers)
+    out = min_ipae(pae_ev, inter)
     expected = (0.75 + 2.25) / 2.0
     assert abs(out.item() - expected) < 1e-5

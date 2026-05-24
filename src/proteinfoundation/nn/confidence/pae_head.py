@@ -189,15 +189,13 @@ class PaeHead(BaseConfidenceHead):
             chain_idx = batch.get("chain_idx")
             if chain_idx is not None and torch.is_tensor(chain_idx):
                 inter = interface_pair_mask(chain_idx, mask_eff)
-                log_dict["i_pae"] = i_pae(logits, inter, centers)
-                log_dict["min_ipae"] = min_ipae(logits, inter, centers)
+                log_dict["i_pae"] = i_pae(pred_cont, inter)
+                log_dict["min_ipae"] = min_ipae(pred_cont, inter)
                 log_dict["i_ptm"] = iptm_from_logits(logits, mask_eff, inter, centers)
                 log_dict["i_ptm_energy"] = iptm_energy_from_logits(
                     logits, mask_eff, inter, centers
                 )
-                log_dict.update(
-                    ipsae_family(logits, mask_eff, inter, centers, ca_coords)
-                )
+                log_dict.update(ipsae_family(pred_cont, chain_idx, mask_eff))
         return total, log_dict
 
     @staticmethod
