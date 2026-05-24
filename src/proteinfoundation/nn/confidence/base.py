@@ -54,6 +54,7 @@ class ConfidenceTrunk(nn.Module):
         use_qkln: bool = True,
         dropout: float = 0.1,
         update_pair_repr_every_n: int = 1,
+        latent_dim: int = 8,
     ) -> None:
         super().__init__()
         self.token_dim = token_dim
@@ -62,6 +63,7 @@ class ConfidenceTrunk(nn.Module):
         self.n_heads = n_heads
         self.dim_cond = dim_cond
         self.update_pair_repr_every_n = update_pair_repr_every_n
+        self.latent_dim = latent_dim
 
         self.transformer_layers = nn.ModuleList(
             [
@@ -101,12 +103,18 @@ class ConfidenceTrunk(nn.Module):
         self.s_layer_norm = nn.LayerNorm(token_dim)
         self.z_layer_norm = nn.LayerNorm(pair_repr_dim)
 
+        self.local_latents_proj = nn.Sequential(
+            nn.Linear(latent_dim, token_dim, bias=False),
+            nn.LayerNorm(token_dim),
+        )
+
     def forward(
         self,
         s: torch.Tensor,
         z: torch.Tensor,
         mask: torch.Tensor,
         cond: torch.Tensor,
+        local_latents: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the trunk.
 
@@ -115,6 +123,11 @@ class ConfidenceTrunk(nn.Module):
             z: `[b, n, n, pair_repr_dim]` pair representation.
             mask: `[b, n]` boolean mask.
             cond: `[b, n, dim_cond]` AdaLN conditioning. Mandatory.
+            local_latents: `[b, n, latent_dim]` pre-trim latents from the
+                frozen complexa trunk; aligned with `s`/`z`/`mask` on the
+                same `n_extended` axis. Projected to `token_dim` and added
+                as a mask-zeroed residual to `s` before the pair-biased
+                attention stack.
 
         Returns:
             `(s_refined, z_refined)`. Both mask-zeroed and LayerNormed;
@@ -125,6 +138,9 @@ class ConfidenceTrunk(nn.Module):
         s = s * mask_f
         pair_mask = (mask[:, None, :] & mask[:, :, None])[..., None]
         z = z * pair_mask
+
+        ll = self.local_latents_proj(local_latents) * mask_f
+        s = s + ll
 
         for i in range(self.n_blocks):
             s = self.transformer_layers[i](s, z, cond, mask)
@@ -183,9 +199,15 @@ class BaseConfidenceHead(nn.Module, ABC):
         z: torch.Tensor,
         mask: torch.Tensor,
         cond: torch.Tensor,
+        local_latents: torch.Tensor,
         chain_id: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run trunk then `_predict`.
+
+        `local_latents` is the pre-trim `[b, n, latent_dim]` tensor from the
+        frozen complexa trunk's intermediates; the shared `ConfidenceTrunk`
+        projects and adds it to `s` as a mask-zeroed residual before its own
+        pair-biased attention stack.
 
         `chain_id` is accepted but currently ignored; the seat is reserved
         for future ipTM / ipAE / ipLDDT subclasses that need per-residue
@@ -196,7 +218,7 @@ class BaseConfidenceHead(nn.Module, ABC):
         """
         del chain_id
 
-        s_ref, z_ref = self.trunk(s, z, mask, cond)
+        s_ref, z_ref = self.trunk(s, z, mask, cond, local_latents)
         return self._predict(s_ref, z_ref, mask)
 
     def compute_loss_and_metrics(

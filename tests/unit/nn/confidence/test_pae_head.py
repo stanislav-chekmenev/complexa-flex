@@ -19,6 +19,7 @@ B, N = 2, 10
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 NUM_PAE_BINS = 64
 
 
@@ -34,6 +35,7 @@ def _make_trunk() -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
 
 
@@ -54,13 +56,14 @@ def _make_inputs(b: int = B, n: int = N, seed: int = 0):
     z = torch.randn(b, n, n, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(b, n, dtype=torch.bool)
     cond = torch.randn(b, n, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(b, n, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def test_forward_returns_pae_logits_shape() -> None:
     head = _make_head().eval()
-    s, z, mask, cond = _make_inputs()
-    out = head(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    out = head(s, z, mask, cond, ll)
     assert "pae_logits" in out
     assert out["pae_logits"].shape == (B, N, N, NUM_PAE_BINS)
 
@@ -69,8 +72,8 @@ def test_gradients_flow_to_head_and_trunk() -> None:
     trunk = _make_trunk()
     head = _make_head(trunk=trunk)
     head.train()
-    s, z, mask, cond = _make_inputs()
-    out = head(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    out = head(s, z, mask, cond, ll)
     loss = (out["pae_logits"] ** 2).mean()
     loss.backward()
 
@@ -111,7 +114,7 @@ def _make_loss_batch(b: int = B, n: int = N, seed: int = 1) -> dict[str, torch.T
 def test_loss_total_emitted_only_outside_train_stage() -> None:
     """Train-time log_dict must NOT carry `loss_total` (would duplicate `loss`)."""
     head = _make_head().eval()
-    s, z, mask, _ = _make_inputs(seed=2)
+    s, z, mask, _, _ = _make_inputs(seed=2)
     out = head._predict(s, z, mask)
     mask_eff = (mask[:, None, :] & mask[:, :, None]).to(torch.float32)
     batch = _make_loss_batch()

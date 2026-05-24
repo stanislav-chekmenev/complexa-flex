@@ -36,6 +36,7 @@ B, L = 2, 10
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 NUM_PLDDT_BINS = 50
 NUM_PAE_BINS = 64
 
@@ -52,6 +53,7 @@ def _make_trunk() -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
 
 
@@ -95,7 +97,8 @@ def _make_inputs(b: int = B, n: int = L, seed: int = 0):
     z = torch.randn(b, n, n, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(b, n, dtype=torch.bool)
     cond = torch.randn(b, n, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(b, n, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def _make_batch(seed: int = 0) -> dict:
@@ -113,8 +116,8 @@ def _make_batch(seed: int = 0) -> dict:
 
 def test_forward_returns_dict_of_per_head_outputs() -> None:
     wrapper = _make_wrapper().eval()
-    s, z, mask, cond = _make_inputs()
-    out = wrapper(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    out = wrapper(s, z, mask, cond, ll)
     assert set(out.keys()) == {"plddt", "pae"}
     assert "plddt_logits" in out["plddt"]
     assert "pae_logits" in out["pae"]
@@ -133,8 +136,8 @@ def test_trunk_runs_exactly_once_per_forward() -> None:
 
     wrapper.trunk.forward = _counting_forward  # type: ignore[method-assign]
     try:
-        s, z, mask, cond = _make_inputs()
-        _ = wrapper(s, z, mask, cond)
+        s, z, mask, cond, ll = _make_inputs()
+        _ = wrapper(s, z, mask, cond, ll)
     finally:
         wrapper.trunk.forward = real_trunk_forward  # type: ignore[method-assign]
 
@@ -145,8 +148,8 @@ def test_trunk_runs_exactly_once_per_forward() -> None:
 
 def test_all_false_pae_mask_does_not_contaminate_total_loss() -> None:
     wrapper = _make_wrapper().eval()
-    s, z, mask, cond = _make_inputs(seed=1)
-    out = wrapper(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs(seed=1)
+    out = wrapper(s, z, mask, cond, ll)
     batch = _make_batch(seed=2)
 
     plddt_mask_eff = batch["plddt_mask"].to(torch.float32)

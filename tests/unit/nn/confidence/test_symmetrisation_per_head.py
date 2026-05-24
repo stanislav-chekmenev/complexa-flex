@@ -18,6 +18,7 @@ B, N = 2, 11
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 N_BLOCKS = 2
 N_HEADS = 4
 NUM_PLDDT_BINS = 50
@@ -35,6 +36,7 @@ def _make_trunk(**overrides) -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
     kwargs.update(overrides)
     return ConfidenceTrunk(**kwargs).eval()
@@ -46,13 +48,14 @@ def _make_inputs(b: int = B, n: int = N, seed: int = 0):
     z = torch.randn(b, n, n, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(b, n, dtype=torch.bool)
     cond = torch.randn(b, n, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(b, n, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def test_trunk_does_not_symmetrise_z() -> None:
     trunk = _make_trunk()
-    s, z, mask, cond = _make_inputs()
-    _, z_out = trunk(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    _, z_out = trunk(s, z, mask, cond, ll)
     assert not torch.allclose(z_out, z_out.transpose(-3, -2), atol=1e-3)
 
 
@@ -73,7 +76,7 @@ def test_plddt_predict_invariant_to_z_symmetrisation() -> None:
         bin_min=0.0,
         bin_max=100.0,
     ).eval()
-    s, z, mask, _ = _make_inputs()
+    s, z, mask, _, _ = _make_inputs()
 
     out_direct = head._predict(s, z, mask)["plddt_logits"]
     out_transposed = head._predict(s, z.transpose(-3, -2), mask)["plddt_logits"]
@@ -92,8 +95,8 @@ def test_pae_predict_is_directional() -> None:
         bin_min=0.0,
         bin_max=32.0,
     ).eval()
-    s, z, mask, cond = _make_inputs()
+    s, z, mask, cond, ll = _make_inputs()
 
-    out = head(s, z, mask, cond)
+    out = head(s, z, mask, cond, ll)
     logits = out["pae_logits"]
     assert not torch.allclose(logits, logits.transpose(-3, -2), atol=1e-3)

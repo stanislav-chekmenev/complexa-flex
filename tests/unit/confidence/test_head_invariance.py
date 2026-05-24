@@ -19,6 +19,7 @@ N_VALID = 5
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 
 
 def _make_head() -> PLDDTHead:
@@ -33,6 +34,7 @@ def _make_head() -> PLDDTHead:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
     return PLDDTHead(
         trunk=trunk,
@@ -50,17 +52,19 @@ def test_padded_position_permutation_invariance() -> None:
     s = torch.randn(B, N, TOKEN_DIM, generator=g)
     z = torch.randn(B, N, N, PAIR_REPR_DIM, generator=g)
     cond = torch.randn(B, N, DIM_COND, generator=g)
+    local_latents = torch.randn(B, N, LATENT_DIM, generator=g)
     mask = torch.zeros(B, N, dtype=torch.bool)
     mask[:, :N_VALID] = True
 
-    out_a = head(s, z, mask, cond)["plddt_logits"]
+    out_a = head(s, z, mask, cond, local_latents)["plddt_logits"]
 
     perm = torch.tensor([0, 1, 2, 3, 4, 7, 5, 6])
     s_perm = s[:, perm]
     z_perm = z[:, perm][:, :, perm]
     cond_perm = cond[:, perm]
+    ll_perm = local_latents[:, perm]
     mask_perm = mask[:, perm]
 
-    out_b = head(s_perm, z_perm, mask_perm, cond_perm)["plddt_logits"]
+    out_b = head(s_perm, z_perm, mask_perm, cond_perm, ll_perm)["plddt_logits"]
 
     assert torch.allclose(out_a[:, :N_VALID, :], out_b[:, :N_VALID, :], atol=1e-5)

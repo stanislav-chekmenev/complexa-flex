@@ -16,6 +16,7 @@ B, N = 2, 9
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 NUM_BINS = 50
 
 
@@ -31,6 +32,7 @@ def _make_head(num_plddt_bins: int = NUM_BINS) -> PLDDTHead:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
     return PLDDTHead(
         trunk=trunk,
@@ -48,13 +50,14 @@ def _make_inputs(b: int = B, n: int = N, seed: int = 0):
     z = torch.randn(b, n, n, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(b, n, dtype=torch.bool)
     cond = torch.randn(b, n, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(b, n, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def test_forward_returns_plddt_logits() -> None:
     head = _make_head()
-    s, z, mask, cond = _make_inputs()
-    out = head(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    out = head(s, z, mask, cond, ll)
     assert "plddt_logits" in out
     assert out["plddt_logits"].shape == (B, N, NUM_BINS)
 
@@ -78,9 +81,9 @@ def test_uniform_logits_yields_midpoint() -> None:
 
 def test_mask_zero_safe() -> None:
     head = _make_head()
-    s, z, mask, cond = _make_inputs()
+    s, z, mask, cond, ll = _make_inputs()
     mask[0, 6:] = False
-    out = head(s, z, mask, cond)
+    out = head(s, z, mask, cond, ll)
     logits = out["plddt_logits"]
 
     assert torch.isfinite(logits[mask]).all()
