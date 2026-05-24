@@ -492,6 +492,40 @@ def iptm_from_logits(
     return per_sample_max.sum() / n_valid_samples
 
 
+def iptm_energy_from_logits(
+    logits: Tensor,
+    mask_eff: Tensor,
+    interface_mask: Tensor,
+    bin_centers: Tensor,
+    *,
+    tm_lambda: float = 1.0,
+    d0_clip_min: int = 19,
+) -> Tensor:
+    """Log-sum-exp energy variant of ipTM. Returns per-batch mean energy.
+
+    For each pair, `energy_ij = -logsumexp(logits_ij + lambda * log w)`.
+    Averaged over the interface mask per-sample, then across samples
+    that have at least one interface pair.
+    """
+    centers = bin_centers.to(logits.device, torch.float32)
+    n_valid = _per_sample_n_valid(mask_eff)
+    n_eff = n_valid.to(torch.float32).clamp_min(float(d0_clip_min))
+    d0 = 1.24 * (n_eff - 15.0).clamp_min(0.0).pow(1.0 / 3.0) - 1.8
+    w = 1.0 / (1.0 + (centers[None, :] / d0[:, None]).pow(2))
+    log_w = w.log()
+    weighted_logits = logits.float() + tm_lambda * log_w[:, None, None, :]
+    pos_energy = -torch.logsumexp(weighted_logits, dim=-1)
+    mask_f = interface_mask.to(torch.float32)
+    sample_denom = mask_f.sum(dim=(-2, -1))
+    per_sample = (pos_energy * mask_f).sum(dim=(-2, -1)) / sample_denom.clamp_min(1.0)
+    sample_has_mass = sample_denom > 0
+    per_sample = torch.where(sample_has_mass, per_sample, torch.zeros_like(per_sample))
+    n_valid_samples = sample_has_mass.to(torch.float32).sum().clamp_min(1.0)
+    if not sample_has_mass.any():
+        return torch.zeros((), device=logits.device, dtype=torch.float32)
+    return per_sample.sum() / n_valid_samples
+
+
 def pae_ece(
     logits: Tensor,
     labels_bin: Tensor,
