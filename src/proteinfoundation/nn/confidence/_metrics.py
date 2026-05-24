@@ -427,6 +427,71 @@ def min_ipae(logits: Tensor, interface_mask: Tensor, bin_centers: Tensor) -> Ten
     )
 
 
+def _per_row_tm_score(
+    logits: Tensor,
+    row_mask: Tensor,
+    n_valid: Tensor,
+    bin_centers: Tensor,
+    *,
+    d0_clip_min: int,
+) -> Tensor:
+    """Per-row TM-score-style aggregate using per-sample `d0`.
+
+    `n_valid` is `[B]`; `d0` therefore varies per sample. The broadcast
+    pattern is `d0[:, None]` for the K axis (per-sample weighting) and
+    `w[:, None, None, :]` to multiply against `[B, L, L, K]` softmax
+    probabilities. The non-obviousness is exactly that broadcast: a
+    naive `bin_centers / d0` (both 1D) would collapse the batch axis.
+    """
+    centers = bin_centers.to(logits.device, torch.float32)
+    n_eff = n_valid.to(torch.float32).clamp_min(float(d0_clip_min))
+    d0 = 1.24 * (n_eff - 15.0).clamp_min(0.0).pow(1.0 / 3.0) - 1.8
+    w = 1.0 / (1.0 + (centers[None, :] / d0[:, None]).pow(2))
+    probs = torch.softmax(logits.float(), dim=-1)
+    score_ij = (probs * w[:, None, None, :]).sum(dim=-1)
+    row_mask_f = row_mask.to(torch.float32)
+    row_denom = row_mask_f.sum(dim=-1).clamp_min(1.0)
+    return (score_ij * row_mask_f).sum(dim=-1) / row_denom
+
+
+def _per_sample_n_valid(mask_eff: Tensor) -> Tensor:
+    """Residue count per sample inferred from the pair mask.
+
+    A residue is "valid" if it participates in any valid pair; for the
+    standard `mask_eff = m[:, None] & m[:, :, None]` construction this
+    is identical to `m.sum(-1)`.
+    """
+    return mask_eff.bool().any(dim=-1).sum(dim=-1)
+
+
+def iptm_from_logits(
+    logits: Tensor,
+    mask_eff: Tensor,
+    interface_mask: Tensor,
+    bin_centers: Tensor,
+    *,
+    d0_clip_min: int = 19,
+) -> Tensor:
+    """ipTM = mean over samples of (max over interface rows of per-row TM score)."""
+    n_valid = _per_sample_n_valid(mask_eff)
+    per_row = _per_row_tm_score(
+        logits, interface_mask, n_valid, bin_centers, d0_clip_min=d0_clip_min
+    )
+    row_has_mass = interface_mask.to(torch.float32).sum(dim=-1) > 0
+    per_row_masked = torch.where(
+        row_has_mass, per_row, torch.full_like(per_row, float("-inf"))
+    )
+    sample_has_any_row = row_has_mass.any(dim=-1)
+    per_sample_max = per_row_masked.max(dim=-1).values
+    per_sample_max = torch.where(
+        sample_has_any_row, per_sample_max, torch.zeros_like(per_sample_max)
+    )
+    n_valid_samples = sample_has_any_row.to(torch.float32).sum().clamp_min(1.0)
+    if not sample_has_any_row.any():
+        return torch.zeros((), device=logits.device, dtype=torch.float32)
+    return per_sample_max.sum() / n_valid_samples
+
+
 def pae_ece(
     logits: Tensor,
     labels_bin: Tensor,
