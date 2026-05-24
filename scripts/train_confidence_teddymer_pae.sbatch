@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=2
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --time=4-00:00:00
 #SBATCH --output=logs/paedistill_%j.out
 #SBATCH --error=logs/paedistill_%j.err
