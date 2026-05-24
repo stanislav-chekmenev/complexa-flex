@@ -41,6 +41,12 @@ __all__ = [
     "pae_mae_stratified_by_distance",
     "pae_ece",
     "pae_ece_adaptive",
+    "interface_pair_mask",
+    "i_pae",
+    "min_ipae",
+    "iptm_from_logits",
+    "iptm_energy_from_logits",
+    "ipsae_family",
 ]
 
 
@@ -365,6 +371,60 @@ def pae_mae_stratified_by_distance(
         denom = active.sum().clamp_min(1.0)
         out[name] = (ae * active).sum() / denom
     return out
+
+
+def interface_pair_mask(chain_idx: Tensor, mask_eff: Tensor) -> Tensor:
+    """Pairs that cross a chain boundary AND are valid under `mask_eff`.
+
+    Args:
+        chain_idx: `[B, L]` integer chain identifiers (monomers carry a
+            single id, dimers carry two, etc.).
+        mask_eff: `[B, L, L]` already-AND-ed pair validity (float or bool).
+
+    Returns:
+        `[B, L, L]` bool. True iff `chain_idx[..., i] != chain_idx[..., j]`
+        AND `mask_eff[..., i, j]` is true.
+    """
+    cross_chain = chain_idx[..., None, :] != chain_idx[..., :, None]
+    return cross_chain & mask_eff.bool()
+
+
+def i_pae(logits: Tensor, interface_mask: Tensor, bin_centers: Tensor) -> Tensor:
+    """Mean PAE expected-value over the cross-chain interface, averaged across the batch."""
+    centers = bin_centers.to(logits.device, torch.float32)
+    probs = torch.softmax(logits.float(), dim=-1)
+    ev = (probs * centers).sum(dim=-1)
+    mask_f = interface_mask.to(torch.float32)
+    per_sample = (ev * mask_f).sum(dim=(-2, -1)) / mask_f.sum(dim=(-2, -1)).clamp_min(1.0)
+    return per_sample.mean()
+
+
+def min_ipae(logits: Tensor, interface_mask: Tensor, bin_centers: Tensor) -> Tensor:
+    """Min over interface rows of the per-row EV mean, averaged across the batch.
+
+    Rows that carry no interface mass are skipped (their per-row mean
+    would be ill-defined). Samples whose interface is entirely empty
+    contribute zero.
+    """
+    centers = bin_centers.to(logits.device, torch.float32)
+    probs = torch.softmax(logits.float(), dim=-1)
+    ev = (probs * centers).sum(dim=-1)
+    mask_f = interface_mask.to(torch.float32)
+    row_denom = mask_f.sum(dim=-1)
+    row_has_mass = row_denom > 0
+    per_row = (ev * mask_f).sum(dim=-1) / row_denom.clamp_min(1.0)
+    per_row_for_min = torch.where(
+        row_has_mass, per_row, torch.full_like(per_row, float("inf"))
+    )
+    sample_has_any_row = row_has_mass.any(dim=-1)
+    per_sample_min = per_row_for_min.min(dim=-1).values
+    per_sample_min = torch.where(
+        sample_has_any_row, per_sample_min, torch.zeros_like(per_sample_min)
+    )
+    n_valid_samples = sample_has_any_row.to(torch.float32).sum().clamp_min(1.0)
+    return per_sample_min.sum() / n_valid_samples if sample_has_any_row.any() else torch.zeros(
+        (), device=logits.device, dtype=torch.float32
+    )
 
 
 def pae_ece(
