@@ -28,12 +28,18 @@ class LocalLatentsTransformer(torch.nn.Module):
 
         When ``expose_intermediates=True``, ``forward(input)`` additionally returns
         ``nn_out['trunk_intermediates']`` carrying the post-trunk
-        ``(s, z, mask, orig_mask, n_orig)``. Default ``False``; bit-identical to
-        the legacy forward when off. The sidecar ``ConfidenceDistillationModule``
-        (PR-4) flips this on programmatically after instantiation — do not set
-        it in trunk Hydra configs. Toggle at construction or immediately
-        afterwards; do not flip during a training run (Dynamo guards on the
-        attribute and would trigger a graph recompile).
+        ``(s, z, mask, orig_mask, n_orig, local_latents)``. Default ``False``;
+        bit-identical to the legacy forward when off. The ``local_latents``
+        entry is the *pre-trim* extended-axis tensor ``[b, n_extended, latent_dim]``
+        whose padded tail (concat-feature positions) is zeroed by the
+        ``mask[..., None]`` factor in ``local_latents_linear``; consumers
+        feeding the confidence head must align it with ``s``/``z``/``mask``
+        from the same intermediates dict. The sidecar
+        ``ConfidenceDistillationModule`` (PR-4) flips this on programmatically
+        after instantiation — do not set it in trunk Hydra configs. Toggle at
+        construction or immediately afterwards; do not flip during a training
+        run (Dynamo guards on the attribute and would trigger a graph
+        recompile).
 
         Returned ``trunk_intermediates`` contract (consumer responsibility):
 
@@ -319,6 +325,11 @@ class LocalLatentsTransformer(torch.nn.Module):
         local_latents_out = self.local_latents_linear(seqs) * mask[..., None]  # [b, n_extended, latent_dim]
         ca_nm_out = self.ca_linear(seqs) * mask[..., None]  # [b, n_extended, 3]
 
+        # Snapshot pre-trim n_extended local_latents for the confidence-distill
+        # sidecar; consumers of `nn_out["local_latents"]` still see the trimmed
+        # `[b, n_orig, latent_dim]` tensor below.
+        local_latents_extended = local_latents_out
+
         # Trim back to original sequence length (remove concat features) if we extended
         if n_concat > 0:
             local_latents_out = local_latents_out[:, :n_orig, :] * orig_mask[:, :, None]
@@ -333,6 +344,7 @@ class LocalLatentsTransformer(torch.nn.Module):
             "mask": mask,
             "orig_mask": orig_mask,
             "n_orig": int(n_orig),
+            "local_latents": local_latents_extended,
         }
 
         nn_out = {}
