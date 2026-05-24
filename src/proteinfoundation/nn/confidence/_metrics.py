@@ -526,6 +526,100 @@ def iptm_energy_from_logits(
     return per_sample.sum() / n_valid_samples
 
 
+def _aggregate_per_row(per_row: Tensor, row_has_mass: Tensor) -> dict[str, Tensor]:
+    """Reduce `[B, L]` per-row scores into `{avg, min, max}` per batch.
+
+    Empty rows are excluded from min/max via sentinel substitution; the
+    avg uses the standard masked-mean denominator. Samples that have
+    no valid row contribute zero (the empty-rows-collapse-to-zero
+    invariant — required to keep the metric finite on monomer batches
+    that slipped through into a "supports interfaces" stage).
+    """
+    row_mass_f = row_has_mass.to(torch.float32)
+    sample_denom = row_mass_f.sum(dim=-1)
+    sample_has_any_row = sample_denom > 0
+    avg_per_sample = (per_row * row_mass_f).sum(dim=-1) / sample_denom.clamp_min(1.0)
+
+    per_row_for_min = torch.where(
+        row_has_mass, per_row, torch.full_like(per_row, float("inf"))
+    )
+    per_row_for_max = torch.where(
+        row_has_mass, per_row, torch.full_like(per_row, float("-inf"))
+    )
+    min_per_sample = per_row_for_min.min(dim=-1).values
+    max_per_sample = per_row_for_max.max(dim=-1).values
+
+    zeros = torch.zeros_like(avg_per_sample)
+    avg_per_sample = torch.where(sample_has_any_row, avg_per_sample, zeros)
+    min_per_sample = torch.where(sample_has_any_row, min_per_sample, zeros)
+    max_per_sample = torch.where(sample_has_any_row, max_per_sample, zeros)
+
+    n_valid = sample_has_any_row.to(torch.float32).sum().clamp_min(1.0)
+    if not sample_has_any_row.any():
+        z = torch.zeros((), device=per_row.device, dtype=torch.float32)
+        return {"avg": z, "min": z, "max": z}
+    return {
+        "avg": avg_per_sample.sum() / n_valid,
+        "min": min_per_sample.sum() / n_valid,
+        "max": max_per_sample.sum() / n_valid,
+    }
+
+
+def ipsae_family(
+    logits: Tensor,
+    mask_eff: Tensor,
+    interface_mask: Tensor,
+    bin_centers: Tensor,
+    ca_coords: Tensor | None,
+    *,
+    contact_threshold: float = 10.0,
+    d0_clip_min: int = 19,
+) -> dict[str, Tensor]:
+    """Interface-restricted PAE-derived family.
+
+    NOTE: this is the ipSAE-*style* score used by the colabdesign binder
+    pipeline: per-row TM-style score restricted to the interface mask,
+    with `{avg, min, max}` aggregations across interface rows, and the
+    `_10` family additionally restricting columns to residues within
+    `contact_threshold` Angstroms of the row's Ca. This is **not** the
+    strict Dunbrack-lab ipSAE (Hoeber & Dunbrack, bioRxiv 2024), which
+    filters by a PAE cutoff, takes the maximum across per-chain
+    directional restrictions, and renormalises by the per-chain length.
+    Use this helper only where the colabdesign reward formulation is
+    the validation target.
+    """
+    centers = bin_centers.to(logits.device, torch.float32)
+    n_valid = _per_sample_n_valid(mask_eff)
+
+    per_row = _per_row_tm_score(
+        logits, interface_mask, n_valid, centers, d0_clip_min=d0_clip_min
+    )
+    row_has_mass = interface_mask.to(torch.float32).sum(dim=-1) > 0
+    base = _aggregate_per_row(per_row, row_has_mass)
+
+    if ca_coords is None:
+        z = torch.zeros((), device=logits.device, dtype=torch.float32)
+        contact = {"avg": z, "min": z, "max": z}
+    else:
+        diff = ca_coords[:, :, None, :] - ca_coords[:, None, :, :]
+        d_ij = diff.pow(2).sum(dim=-1).clamp_min(0.0).sqrt()
+        contact_mask = (d_ij <= contact_threshold) & interface_mask.bool()
+        per_row_c = _per_row_tm_score(
+            logits, contact_mask, n_valid, centers, d0_clip_min=d0_clip_min
+        )
+        row_has_mass_c = contact_mask.to(torch.float32).sum(dim=-1) > 0
+        contact = _aggregate_per_row(per_row_c, row_has_mass_c)
+
+    return {
+        "avg_ipsae": base["avg"],
+        "min_ipsae": base["min"],
+        "max_ipsae": base["max"],
+        "avg_ipsae_10": contact["avg"],
+        "min_ipsae_10": contact["min"],
+        "max_ipsae_10": contact["max"],
+    }
+
+
 def pae_ece(
     logits: Tensor,
     labels_bin: Tensor,
