@@ -139,6 +139,10 @@ class ConfidenceTrunk(nn.Module):
         pair_mask = (mask[:, None, :] & mask[:, :, None])[..., None]
         z = z * pair_mask
 
+        # The `* mask_f` is load-bearing once training drifts `LayerNorm.bias`
+        # off zero: LN of a (mask-zeroed) zero input returns the trained bias,
+        # not zero, so the post-LN mask multiply is what keeps padded positions
+        # from leaking the LN bias into valid cells through downstream attention.
         ll = self.local_latents_proj(local_latents) * mask_f
         s = s + ll
 

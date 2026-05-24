@@ -118,13 +118,18 @@ def test_nonzero_local_latents_changes_output_vs_zero() -> None:
     )
 
 
-def test_zero_local_latents_projection_is_zero_residual() -> None:
-    """`LN(Linear(0)) == 0` because Linear has no bias and LayerNorm's
-    affine acts on a zero pre-activation: input `0` -> mean 0, var 0 ->
-    normalized 0 (with eps in the denom), then `* gamma + beta`. With
-    PyTorch's default `gamma=1, beta=0`, the LN output of a zero input
-    is identically zero. The trunk must therefore add a literal zero
-    residual when fed `ll=zeros`.
+def test_zero_local_latents_projection_at_init_is_zero_residual() -> None:
+    """At init, `LN(Linear(0)) == 0` because Linear has no bias and the
+    default `LayerNorm` affine is `gamma=1, beta=0` -- so an all-zero
+    input yields an all-zero LN output, then `+ beta=0`.
+
+    This contract holds *only at init*. Once training drifts `beta` off
+    zero (it is trainable), `LN(0) = beta` and this assertion no longer
+    holds for `proj(zeros)` itself. The trunk stays correct anyway
+    because the `* mask_f` multiply at `base.py:142` zeros the residual
+    at padded positions regardless of `beta` -- see
+    `test_local_latents_residual_is_mask_zeroed_at_padded_positions`
+    for the post-training-safe contract.
     """
     trunk = _make_trunk().eval()
     b, n = 2, 16
@@ -133,8 +138,44 @@ def test_zero_local_latents_projection_is_zero_residual() -> None:
     with torch.no_grad():
         projected = trunk.local_latents_proj(ll_zero)
     assert torch.equal(projected, torch.zeros_like(projected)), (
-        f"Linear(no bias) + LayerNorm of zeros must equal zero, got max abs "
+        f"Linear(no bias) + LayerNorm of zeros at init must equal zero, got max abs "
         f"{projected.abs().max().item()}"
+    )
+
+
+def test_mask_multiply_guards_against_trained_layernorm_bias_leak() -> None:
+    """The load-bearing safety property: after training drifts the
+    `LayerNorm.bias` off zero, padded positions stay clean because the
+    `* mask_f` multiply in `ConfidenceTrunk.forward` zeros the residual
+    at masked-out positions before the `s = s + ll` add.
+
+    Probe the post-LN bias drift directly: write a non-zero bias into
+    `local_latents_proj[1].bias`, run two forward passes whose
+    `local_latents` differ only at masked-out positions, and assert
+    `s_out` is identical at every position. If the mask multiply were
+    removed, the LN-bias residual would leak from padded latents into
+    valid `s` cells through the downstream attention.
+    """
+    trunk = _make_trunk().eval()
+    with torch.no_grad():
+        trunk.local_latents_proj[1].bias.fill_(0.3)
+
+    b, n = 2, 16
+    s, z, mask, cond = _make_inputs(b=b, n=n)
+    mask[0, 12:] = False
+
+    ll_a = torch.randn(b, n, LATENT_DIM, generator=torch.Generator().manual_seed(17))
+    ll_b = ll_a.clone()
+    ll_b[0, 12:] = torch.randn(4, LATENT_DIM, generator=torch.Generator().manual_seed(19))
+
+    with torch.no_grad():
+        s_a, _ = trunk(s, z, mask, cond, ll_a)
+        s_b, _ = trunk(s, z, mask, cond, ll_b)
+
+    assert torch.allclose(s_a, s_b, atol=1e-6), (
+        "With LN.bias drifted off zero, mutating local_latents at masked "
+        "positions must STILL not affect s_out: the mask multiply at "
+        "ConfidenceTrunk.forward is load-bearing once training updates beta."
     )
 
 
