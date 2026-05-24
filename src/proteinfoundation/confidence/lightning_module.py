@@ -18,11 +18,14 @@ Forward path per batch (all pre-head steps under `torch.no_grad()`):
    regime. This keeps the head in the AdaLN regime the trunk was
    trained for.
 4. `proteina.nn(batch)` returns `trunk_intermediates = {s, z, mask,
-   orig_mask, n_orig}`.
+   orig_mask, n_orig, local_latents}`. `local_latents` is the pre-trim
+   `[b, n_extended, latent_dim]` tensor from the frozen trunk; the head's
+   shared `ConfidenceTrunk` projects and adds it to `s` as a mask-zeroed
+   residual before its pair-biased attention stack.
 5. `_compute_cond(batch)` runs the trunk's `cond_factory` on the same
    `t`-pinned batch (still under no_grad), producing `[b, n, dim_cond]`.
-6. `head(s, z, mask, cond)` (trainable); outputs trimmed to `n_orig`
-   along the residue axis.
+6. `head(s, z, mask, cond, local_latents)` (trainable); outputs trimmed
+   to `n_orig` along the residue axis.
 7. The head's own `compute_loss_and_metrics(out, batch_trimmed, mask_eff,
    stage)` returns `(total, log_dict)`; the module prefixes the log keys
    with `{train,val}/{head.output_name_root}/`.
@@ -320,13 +323,14 @@ class ConfidenceDistillationModule(L.LightningModule):
         mask_ext = inter["mask"]
         orig_mask = inter["orig_mask"]
         n_orig = int(inter["n_orig"])
+        local_latents = inter["local_latents"]
 
         cond = self._pad_cond_to_n_ext(cond, mask_ext)
         assert cond.shape[1] == mask_ext.shape[1], (
             f"cond axis-1 {cond.shape[1]} must match mask_ext axis-1 {mask_ext.shape[1]} after padding"
         )
 
-        head_out_raw = self.head(s, z, mask_ext, cond)
+        head_out_raw = self.head(s, z, mask_ext, cond, local_latents)
         head_out = self._trim_head_output(head_out_raw, n_orig)
 
         if orig_mask.dtype != torch.bool:
