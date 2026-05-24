@@ -28,17 +28,6 @@ confidence:
         _target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
         trunk:
           _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
-          token_dim: 768
-          pair_repr_dim: 256
-          n_blocks: 4
-          n_heads: 16
-          dim_cond: 256
-          use_tri_mult: true
-          use_tri_attn: false
-          use_qkln: true
-          dropout: 0.1
-          update_pair_repr_every_n: 1
-          latent_dim: 8
         token_dim: 768
         pair_repr_dim: 256
         num_plddt_bins: 50
@@ -51,17 +40,6 @@ confidence:
         _target_: proteinfoundation.nn.confidence.pae_head.PaeHead
         trunk:
           _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
-          token_dim: 768
-          pair_repr_dim: 256
-          n_blocks: 4
-          n_heads: 16
-          dim_cond: 256
-          use_tri_mult: true
-          use_tri_attn: false
-          use_qkln: true
-          dropout: 0.1
-          update_pair_repr_every_n: 1
-          latent_dim: 8
         token_dim: 768
         pair_repr_dim: 256
         num_pae_bins: 64
