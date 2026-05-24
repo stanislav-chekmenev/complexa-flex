@@ -4,7 +4,7 @@
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=4-00:00:00
@@ -23,6 +23,7 @@ echo "==========================================="
 # --- Project layout ---
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
 NUM_DEVICES=2
+NUM_NODES=${SLURM_NNODES:-2}
 DEVICE_TYPE=h100nvl
 
 # --- Source project env (uses PROJECT_ROOT) ---
@@ -138,7 +139,9 @@ echo "  Project root: $PROJECT_ROOT"
 echo "  Data root:    $DATA_ROOT"
 echo "  CKPTs:        $CKPT_DIR_DST"
 echo "  Run dir:      $RUN_DIR"
-echo "  GPUs:         ${NUM_DEVICES}x $DEVICE_TYPE"
+echo "  Nodes:        ${NUM_NODES}"
+echo "  GPUs/node:    ${NUM_DEVICES}x $DEVICE_TYPE"
+echo "  World size:   $((NUM_NODES * NUM_DEVICES))"
 echo ""
 
 # --- WandB auth ---
@@ -150,6 +153,10 @@ echo ""
 unset WANDB_API_KEY
 
 # --- NCCL tuning ---
+# h100 partition has no InfiniBand; inter-node NCCL falls back to TCP/Ethernet.
+# NCCL_IB_DISABLE=1 is mandatory here (probing IB on a non-IB fabric stalls).
+# NCCL_SOCKET_IFNAME can be pinned (e.g. =eth0) if NCCL guesses the wrong
+# interface — surface NCCL_DEBUG=INFO first and pin only if needed.
 export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
@@ -182,6 +189,7 @@ fi
 srun --kill-on-bad-exit /usr/bin/env -u WANDB_API_KEY "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
     --config-name=confidence/distillation_teddymer_multihead \
     trainer.devices=$NUM_DEVICES \
+    trainer.num_nodes=$NUM_NODES \
     trainer.precision=bf16-mixed \
     "${EXTRA_OVERRIDES[@]}"
 

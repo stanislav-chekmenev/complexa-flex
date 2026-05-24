@@ -103,10 +103,15 @@ def main(cfg: DictConfig) -> None:
         from proteinfoundation.datasets.teddymer.integrity import (
             verify_teddymer_blob_integrity,
         )
-        verify_teddymer_blob_integrity(
-            view_root=Path(integrity_cfg["view_root"]),
-            snapshot_path=Path(integrity_cfg["snapshot_path"]),
-        )
+        # /netscratch is shared across ranks: running the md5 stream on
+        # every rank quadruples I/O on the same 136 GB blob. Gate to global
+        # RANK 0 (or single-process launch where RANK is unset); other
+        # ranks block on Lightning's setup barrier inside trainer.fit().
+        if int(os.environ.get("RANK", "0")) == 0:
+            verify_teddymer_blob_integrity(
+                view_root=Path(integrity_cfg["view_root"]),
+                snapshot_path=Path(integrity_cfg["snapshot_path"]),
+            )
 
     head = build_confidence_head_from_cfg(cfg.confidence.head)
 
