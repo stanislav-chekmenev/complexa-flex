@@ -1,13 +1,14 @@
 """Tests for ``configs/dataset/unified/teddymer_with_plddt_and_pae.yaml``
 and the ``TeddymerDimerDataModule``.
 
-The config is the Hydra entry-point that ties together the parquet view at
-``/mnt/storage01/home/schekmenev/data/teddymer_v1/`` and the AFDB-label
-transforms. The tests compose the config against ``tmp_path`` fixtures,
-instantiate the datamodule, pin the YAML filter contract (geometry-only,
-``interface_length > 10``), and pull one batch from the train dataloader
-to confirm the expected fields land on the batch and that variable-length
-dimers pad correctly.
+The config is the Hydra entry-point that ties together the Teddymer parquet
+view (canonical runtime location ``/netscratch/schekmenev/teddymer_v1_blob/``;
+labs NFS ``~/data/teddymer_v1/`` holds only the integrity-gate metadata) and
+the AFDB-label transforms. The tests compose the config against ``tmp_path``
+fixtures, instantiate the datamodule, pin the YAML filter contract
+(geometry-only, ``interface_length > 10``), and pull one batch from the
+train dataloader to confirm the expected fields land on the batch and that
+variable-length dimers pad correctly.
 
 The filter is geometry-only by design: filtering training rows by an
 aggregate of the head's own predicted quantity (``avg_int_plddt`` /
@@ -153,8 +154,10 @@ def test_geometry_only_filter_drops_only_small_interfaces(tmp_path):
     D1/D2's pLDDT and PAE are not gated; the head must see the full confidence
     range present in the blob, since filtering by an aggregate of the head's
     own predicted quantity is a selection-bias antipattern that miscalibrates
-    the head outside the trained range (AF2-multimer, Boltz-1, Chai-1, and
-    BindCraft all train confidence on unfiltered structures for this reason).
+    the head outside the trained range (AF2-multimer, Boltz-1/-2, and Chai-1
+    all filter their confidence-head training sets on data-source quality
+    axes — resolution, clustering, homology — but never on the model's own
+    confidence outputs).
     """
     dimers_path, locator_path = _build_view(tmp_path)
     cfg = _compose_cfg(dimers_path, locator_path, tmp_path)
