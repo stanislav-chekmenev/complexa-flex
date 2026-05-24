@@ -128,14 +128,24 @@ def combined_plddt_loss(
     smooth_l1_weight: float = 0.1,
     label_smoothing: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """`ce_weight * CE + smooth_l1_weight * SmoothL1_on_EV`."""
+    """`ce_weight * CE + smooth_l1_weight * SmoothL1_on_EV`.
+
+    `smooth_l1_weight == 0.0` short-circuits the EV path entirely: no
+    softmax / bin-center sum / smooth-L1 ops, no autograd graph nodes,
+    and the `loss_smooth_l1` log entry is a clean fp32 zero. Bit-equal
+    to `ce_weight * loss_ce`.
+    """
     loss_ce = masked_plddt_cross_entropy(
         student_logits, plddt_bin_labels, mask, label_smoothing=label_smoothing
     )
-    loss_smooth_l1 = masked_smooth_l1_on_expected_value(
-        student_logits, plddt_continuous, mask, bin_centers
-    )
-    total = ce_weight * loss_ce + smooth_l1_weight * loss_smooth_l1
+    if smooth_l1_weight == 0.0:
+        loss_smooth_l1 = torch.zeros((), device=loss_ce.device, dtype=loss_ce.dtype)
+        total = ce_weight * loss_ce
+    else:
+        loss_smooth_l1 = masked_smooth_l1_on_expected_value(
+            student_logits, plddt_continuous, mask, bin_centers
+        )
+        total = ce_weight * loss_ce + smooth_l1_weight * loss_smooth_l1
     return total, {"loss_ce": loss_ce, "loss_smooth_l1": loss_smooth_l1}
 
 
@@ -202,14 +212,25 @@ def combined_pae_loss(
     smooth_l1_weight: float = 0.1,
     label_smoothing: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """`ce_weight * masked_CE + smooth_l1_weight * SmoothL1_on_EV` for PAE."""
+    """`ce_weight * masked_CE + smooth_l1_weight * SmoothL1_on_EV` for PAE.
+
+    `smooth_l1_weight == 0.0` short-circuits the EV path entirely. For
+    a `[b, n, n, k]` PAE tensor at the H100 Teddymer config (b=2, n=550,
+    k=64) this saves a ~150 MB fp32 softmax + bin-center reduction and
+    the corresponding autograd-graph allocations under the reentrant-ckpt
+    + variable-L workload that already pressures the caching allocator.
+    """
     loss_ce = masked_pae_cross_entropy(
         student_logits, pae_bin_labels, mask, label_smoothing=label_smoothing
     )
-    loss_smooth_l1 = masked_smooth_l1_on_pae_expected_value(
-        student_logits, pae_continuous, mask, bin_centers
-    )
-    total = ce_weight * loss_ce + smooth_l1_weight * loss_smooth_l1
+    if smooth_l1_weight == 0.0:
+        loss_smooth_l1 = torch.zeros((), device=loss_ce.device, dtype=loss_ce.dtype)
+        total = ce_weight * loss_ce
+    else:
+        loss_smooth_l1 = masked_smooth_l1_on_pae_expected_value(
+            student_logits, pae_continuous, mask, bin_centers
+        )
+        total = ce_weight * loss_ce + smooth_l1_weight * loss_smooth_l1
     return total, {"loss_ce": loss_ce, "loss_smooth_l1": loss_smooth_l1}
 
 
