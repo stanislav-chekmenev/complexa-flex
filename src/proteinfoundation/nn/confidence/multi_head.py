@@ -131,6 +131,7 @@ class MultiHeadConfidence(BaseConfidenceHead):
         z: torch.Tensor,
         mask: torch.Tensor,
         cond: torch.Tensor,
+        local_latents: torch.Tensor,
         chain_id: torch.Tensor | None = None,
     ) -> dict[str, dict[str, torch.Tensor]]:
         """Run the trunk once and dispatch refined `(s, z, mask)` to every child.
@@ -140,7 +141,7 @@ class MultiHeadConfidence(BaseConfidenceHead):
         from a single trunk forward.
         """
         del chain_id
-        s_ref, z_ref = self.trunk(s, z, mask, cond)
+        s_ref, z_ref = self.trunk(s, z, mask, cond, local_latents)
         return {
             name: head._predict(s_ref, z_ref, mask)
             for name, head in self.children_heads.items()

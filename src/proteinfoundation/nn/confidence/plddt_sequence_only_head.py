@@ -82,11 +82,19 @@ class SequenceOnlyPLDDTHead(BaseConfidenceHead):
         z: torch.Tensor,
         mask: torch.Tensor,
         cond: torch.Tensor,
+        local_latents: torch.Tensor,
         chain_id: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
+        """Run the trunk with `z` zeroed; `local_latents` is kept live.
+
+        The sequence-only control isolates whatever signal the head can
+        recover *without* the pair representation. `local_latents` is part
+        of the sequence-axis state (it is added to `s` as a residual inside
+        the trunk), so we deliberately do not zero it; only `z` is suppressed.
+        """
         del chain_id
         z_zeroed = torch.zeros_like(z)
-        s_ref, z_ref = self.trunk(s, z_zeroed, mask, cond)
+        s_ref, z_ref = self.trunk(s, z_zeroed, mask, cond, local_latents)
         return self._predict(s_ref, z_ref, mask)
 
     def _predict(

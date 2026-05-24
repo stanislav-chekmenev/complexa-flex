@@ -85,6 +85,9 @@ class _FakeProteinaNN(nn.Module):
         z = self.embed_pair(ones_pair)
         pair_mask = (mask[:, None, :] & mask[:, :, None])[..., None].to(z.dtype)
         z = z * pair_mask
+        local_latents = batch["x_t"]["local_latents"] * mask[..., None].to(
+            batch["x_t"]["local_latents"].dtype
+        )
         return {
             "trunk_intermediates": {
                 "s": s,
@@ -92,6 +95,7 @@ class _FakeProteinaNN(nn.Module):
                 "mask": mask,
                 "orig_mask": mask,
                 "n_orig": int(n),
+                "local_latents": local_latents,
             }
         }
 
@@ -219,6 +223,7 @@ def _make_wrapper() -> MultiHeadConfidence:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
     plddt = PLDDTHead(
         trunk=trunk,
@@ -353,7 +358,9 @@ def _ddp_worker(
             cond = module.proteina.nn.cond_factory(batch)
 
         inter = nn_out["trunk_intermediates"]
-        head_out = ddp_head(inter["s"], inter["z"], inter["mask"], cond)
+        head_out = ddp_head(
+            inter["s"], inter["z"], inter["mask"], cond, inter["local_latents"]
+        )
         masks_by_head = {
             "plddt": batch["plddt_mask"].to(torch.float32),
             "pae": batch["pae_mask"].to(torch.float32),

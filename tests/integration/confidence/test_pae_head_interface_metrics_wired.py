@@ -40,6 +40,9 @@ INTERFACE_KEYS = {
 }
 
 
+LATENT_DIM = 8
+
+
 def _make_trunk() -> ConfidenceTrunk:
     return ConfidenceTrunk(
         token_dim=TOKEN_DIM,
@@ -52,6 +55,7 @@ def _make_trunk() -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
 
 
@@ -72,10 +76,11 @@ def _make_dimer_batch_and_out() -> tuple[PaeHead, dict, dict, torch.Tensor]:
     z = torch.randn(B, L_DIMER, L_DIMER, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(B, L_DIMER, dtype=torch.bool)
     cond = torch.randn(B, L_DIMER, DIM_COND, generator=g)
+    local_latents = torch.randn(B, L_DIMER, LATENT_DIM, generator=g)
 
     head = _make_head().eval()
     with torch.no_grad():
-        out = head(s, z, mask, cond)
+        out = head(s, z, mask, cond, local_latents)
     mask_eff = (mask[:, None, :] & mask[:, :, None]).to(torch.float32)
 
     chain_idx = torch.zeros(B, L_DIMER, dtype=torch.long)

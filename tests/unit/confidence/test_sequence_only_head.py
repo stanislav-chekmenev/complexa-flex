@@ -20,6 +20,7 @@ B, N = 2, 37
 TOKEN_DIM = 32
 PAIR_REPR_DIM = 16
 DIM_COND = 16
+LATENT_DIM = 8
 NUM_BINS = 50
 
 
@@ -35,6 +36,7 @@ def _make_head() -> SequenceOnlyPLDDTHead:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1_000_000,
+        latent_dim=LATENT_DIM,
     )
     return SequenceOnlyPLDDTHead(
         trunk=trunk,
@@ -52,7 +54,8 @@ def _make_inputs(seed: int = 0):
     z = torch.randn(B, N, N, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(B, N, dtype=torch.bool)
     cond = torch.randn(B, N, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(B, N, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def test_registry_contains_sequence_only_head() -> None:
@@ -62,8 +65,8 @@ def test_registry_contains_sequence_only_head() -> None:
 
 def test_forward_returns_plddt_logits_with_expected_shape() -> None:
     head = _make_head()
-    s, z, mask, cond = _make_inputs()
-    out = head(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    out = head(s, z, mask, cond, ll)
     assert "plddt_logits" in out
     assert out["plddt_logits"].shape == (B, N, NUM_BINS)
 
@@ -75,20 +78,21 @@ def test_output_is_z_independent() -> None:
     s = torch.randn(B, N, TOKEN_DIM, generator=g1)
     cond = torch.randn(B, N, DIM_COND, generator=g1)
     mask = torch.ones(B, N, dtype=torch.bool)
+    ll = torch.randn(B, N, LATENT_DIM, generator=g1)
 
     z1 = torch.randn(B, N, N, PAIR_REPR_DIM, generator=g1)
     z2 = torch.randn(B, N, N, PAIR_REPR_DIM, generator=g2)
 
-    out1 = head(s, z1, mask, cond)["plddt_logits"]
-    out2 = head(s, z2, mask, cond)["plddt_logits"]
+    out1 = head(s, z1, mask, cond, ll)["plddt_logits"]
+    out2 = head(s, z2, mask, cond, ll)["plddt_logits"]
     assert torch.allclose(out1, out2, atol=1e-5)
 
 
 def test_padded_positions_are_zeroed() -> None:
     head = _make_head()
-    s, z, mask, cond = _make_inputs()
+    s, z, mask, cond, ll = _make_inputs()
     mask[0, 20:] = False
-    out = head(s, z, mask, cond)
+    out = head(s, z, mask, cond, ll)
     logits = out["plddt_logits"]
     assert torch.all(logits[0, 20:, :] == 0.0)
     assert torch.isfinite(logits[mask]).all()

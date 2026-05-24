@@ -105,3 +105,38 @@ def test_combined_loss_decomposition() -> None:
     assert torch.allclose(total, expected, atol=1e-6)
     assert torch.allclose(parts["loss_ce"], ce, atol=1e-6)
     assert torch.allclose(parts["loss_smooth_l1"], sl1, atol=1e-6)
+
+
+def test_combined_plddt_loss_ev_weight_zero_short_circuit() -> None:
+    """`smooth_l1_weight=0.0` must bit-equal `ce_weight * loss_ce`.
+
+    The `loss_smooth_l1` entry stays in the log dict as a clean fp32
+    zero; downstream dashboards keep the same key set regardless of the
+    recipe.
+    """
+    torch.manual_seed(5)
+    b, n, k = 2, 6, 50
+    logits = torch.randn(b, n, k)
+    labels = torch.randint(0, k, (b, n))
+    targets = torch.rand(b, n) * 100.0
+    mask = torch.ones(b, n)
+    centers = _bin_centers(k)
+
+    ce = masked_plddt_cross_entropy(logits, labels, mask, label_smoothing=0.0)
+
+    total, parts = combined_plddt_loss(
+        logits,
+        labels,
+        targets,
+        mask,
+        centers,
+        ce_weight=1.0,
+        smooth_l1_weight=0.0,
+        label_smoothing=0.0,
+    )
+    assert torch.equal(total, ce), "ce_weight=1.0 short-circuit must be bit-equal to CE"
+    assert torch.equal(
+        parts["loss_smooth_l1"], torch.zeros_like(parts["loss_smooth_l1"])
+    )
+    assert parts["loss_smooth_l1"].dtype == torch.float32
+    assert torch.allclose(parts["loss_ce"], ce, atol=1e-6)

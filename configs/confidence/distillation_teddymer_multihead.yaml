@@ -38,14 +38,15 @@ confidence:
           use_qkln: true
           dropout: 0.1
           update_pair_repr_every_n: 1
+          latent_dim: 8
         token_dim: 768
         pair_repr_dim: 256
         num_plddt_bins: 50
         bin_min: 0.0
         bin_max: 100.0
-        ce_weight: 0.9
-        ev_weight: 0.1
-        label_smoothing: 0.05
+        ce_weight: 1.0
+        ev_weight: 0.0
+        label_smoothing: 0.0
       pae:
         _target_: proteinfoundation.nn.confidence.pae_head.PaeHead
         trunk:
@@ -60,17 +61,18 @@ confidence:
           use_qkln: true
           dropout: 0.1
           update_pair_repr_every_n: 1
+          latent_dim: 8
         token_dim: 768
         pair_repr_dim: 256
         num_pae_bins: 64
         bin_min: 0.0
         bin_max: 32.0
-        ce_weight: 0.9
-        ev_weight: 0.1
+        ce_weight: 1.0
+        ev_weight: 0.0
         label_smoothing: 0.0
     loss_weights:
-      plddt: 0.7
-      pae: 0.7
+      plddt: 1.0
+      pae: 1.0
 
 trainer:
   _target_: lightning.pytorch.Trainer

@@ -67,6 +67,12 @@ class _FakeProteinaNN(nn.Module):
         z = self.embed_pair(ones_pair)
         pair_mask = (mask_ext[:, None, :] & mask_ext[:, :, None])[..., None].to(z.dtype)
         z = z * pair_mask
+        local_latents = torch.zeros(
+            b, n_ext, LATENT_DIM, device=mask.device, dtype=torch.float32
+        )
+        local_latents[:, :n] = batch["x_t"]["local_latents"] * mask[..., None].to(
+            local_latents.dtype
+        )
         return {
             "trunk_intermediates": {
                 "s": s,
@@ -74,6 +80,7 @@ class _FakeProteinaNN(nn.Module):
                 "mask": mask_ext,
                 "orig_mask": orig_mask,
                 "n_orig": int(n),
+                "local_latents": local_latents,
             }
         }
 
@@ -157,6 +164,7 @@ def _make_head() -> SequenceOnlyPLDDTHead:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1_000_000,
+        latent_dim=LATENT_DIM,
     )
     return SequenceOnlyPLDDTHead(
         trunk=trunk,

@@ -103,6 +103,40 @@ def test_combined_pae_loss_defaults_sum() -> None:
     assert torch.allclose(parts["loss_smooth_l1"], sl1, atol=1e-6)
 
 
+def test_combined_pae_loss_ev_weight_zero_short_circuit() -> None:
+    """`smooth_l1_weight=0.0` must bit-equal `ce_weight * loss_ce`.
+
+    The EV softmax + bin-center reduction is the load-bearing allocation
+    in PAE training (`[b, n, n, k]` fp32 cast); short-circuiting saves
+    it under the `ev_weight=0` recipe used by the multi-head distill.
+    """
+    torch.manual_seed(11)
+    b, n, k = 1, 4, 64
+    centers = _pae_bin_centers(k)
+    logits = torch.randn(b, n, n, k)
+    labels = torch.randint(0, k, (b, n, n))
+    target_cont = centers[labels]
+    mask = torch.ones(b, n, n, dtype=torch.float32)
+
+    ce = masked_pae_cross_entropy(logits, labels, mask, label_smoothing=0.0)
+
+    total, parts = combined_pae_loss(
+        student_logits=logits,
+        pae_bin_labels=labels,
+        pae_continuous=target_cont,
+        mask=mask,
+        bin_centers=centers,
+        ce_weight=1.0,
+        smooth_l1_weight=0.0,
+    )
+    assert torch.equal(total, ce), "ce_weight=1.0 short-circuit must be bit-equal to CE"
+    assert torch.equal(
+        parts["loss_smooth_l1"], torch.zeros_like(parts["loss_smooth_l1"])
+    )
+    assert parts["loss_smooth_l1"].dtype == torch.float32
+    assert torch.allclose(parts["loss_ce"], ce, atol=1e-6)
+
+
 def test_pae_ece_adaptive_finite_on_partial_mask() -> None:
     torch.manual_seed(7)
     b, n, k = 1, 5, 4

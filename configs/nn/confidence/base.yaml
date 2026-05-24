@@ -10,3 +10,4 @@ trunk:
   use_qkln: True
   dropout: 0.1
   update_pair_repr_every_n: 1
+  latent_dim: 8

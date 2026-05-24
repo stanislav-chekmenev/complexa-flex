@@ -31,6 +31,7 @@ B, L = 2, 8
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 NUM_PLDDT_BINS = 50
 NUM_PAE_BINS = 64
 
@@ -47,6 +48,7 @@ def _make_trunk() -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
 
 
@@ -82,7 +84,8 @@ def _make_inputs(seed: int = 0):
     z = torch.randn(B, L, L, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(B, L, dtype=torch.bool)
     cond = torch.randn(B, L, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(B, L, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def _make_batch(seed: int = 1) -> dict:
@@ -118,8 +121,8 @@ def _grad_has_signal(p: torch.nn.Parameter) -> bool:
 def test_weight_zero_on_pae_disables_pae_gradients_and_matches_single_head_loss() -> None:
     wrapper = _make_wrapper()
     wrapper.train()
-    s, z, mask, cond = _make_inputs(seed=0)
-    out = wrapper(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs(seed=0)
+    out = wrapper(s, z, mask, cond, ll)
     batch = _make_batch(seed=1)
     masks = _masks_all_true()
 
@@ -164,8 +167,8 @@ def test_weight_zero_on_pae_disables_pae_gradients_and_matches_single_head_loss(
 def test_both_active_gradients_reach_both_heads_and_trunk() -> None:
     wrapper = _make_wrapper()
     wrapper.train()
-    s, z, mask, cond = _make_inputs(seed=2)
-    out = wrapper(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs(seed=2)
+    out = wrapper(s, z, mask, cond, ll)
     batch = _make_batch(seed=3)
     masks = _masks_all_true()
 
@@ -190,8 +193,8 @@ def test_both_active_gradients_reach_both_heads_and_trunk() -> None:
 def test_plddt_zero_only_grads_pae_and_trunk() -> None:
     wrapper = _make_wrapper()
     wrapper.train()
-    s, z, mask, cond = _make_inputs(seed=4)
-    out = wrapper(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs(seed=4)
+    out = wrapper(s, z, mask, cond, ll)
     batch = _make_batch(seed=5)
     masks = _masks_all_true()
 
@@ -217,8 +220,8 @@ def test_plddt_zero_only_grads_pae_and_trunk() -> None:
 
 def test_log_dict_structure_and_total_equals_weighted_sum() -> None:
     wrapper = _make_wrapper().eval()
-    s, z, mask, cond = _make_inputs(seed=6)
-    out = wrapper(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs(seed=6)
+    out = wrapper(s, z, mask, cond, ll)
     batch = _make_batch(seed=7)
     masks = _masks_all_true()
 

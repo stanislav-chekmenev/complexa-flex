@@ -91,6 +91,7 @@ def _make_plddt_head() -> PLDDTHead:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
     return PLDDTHead(
         trunk=trunk,
@@ -116,6 +117,7 @@ def test_tiny_trunk_to_plddt_head_wires() -> None:
     s = inter["s"]
     z = inter["z"]
     mask = inter["mask"]
+    local_latents = inter["local_latents"]
     n_extended = s.shape[1]
     assert n_extended == n_orig
 
@@ -123,7 +125,7 @@ def test_tiny_trunk_to_plddt_head_wires() -> None:
     g = torch.Generator().manual_seed(1)
     cond = torch.randn(b, n_extended, DIM_COND, generator=g)
 
-    head_out = head(s, z, mask, cond)
+    head_out = head(s, z, mask, cond, local_latents)
     logits = head_out["plddt_logits"]
 
     assert logits.shape == (b, n_extended, NUM_BINS)

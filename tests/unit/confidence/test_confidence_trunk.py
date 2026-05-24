@@ -19,6 +19,7 @@ B, N = 2, 11
 TOKEN_DIM = 64
 PAIR_REPR_DIM = 32
 DIM_COND = 32
+LATENT_DIM = 8
 N_BLOCKS = 2
 N_HEADS = 4
 
@@ -35,6 +36,7 @@ def _make_trunk(**overrides) -> ConfidenceTrunk:
         use_qkln=True,
         dropout=0.0,
         update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
     )
     kwargs.update(overrides)
     return ConfidenceTrunk(**kwargs).eval()
@@ -46,22 +48,23 @@ def _make_inputs(b: int = B, n: int = N, seed: int = 0):
     z = torch.randn(b, n, n, PAIR_REPR_DIM, generator=g)
     mask = torch.ones(b, n, dtype=torch.bool)
     cond = torch.randn(b, n, DIM_COND, generator=g)
-    return s, z, mask, cond
+    local_latents = torch.randn(b, n, LATENT_DIM, generator=g)
+    return s, z, mask, cond, local_latents
 
 
 def test_forward_shapes_match_inputs() -> None:
     trunk = _make_trunk()
-    s, z, mask, cond = _make_inputs()
-    s_out, z_out = trunk(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    s_out, z_out = trunk(s, z, mask, cond, ll)
     assert s_out.shape == s.shape
     assert z_out.shape == z.shape
 
 
 def test_mask_zeroes_padded_positions() -> None:
     trunk = _make_trunk()
-    s, z, mask, cond = _make_inputs()
+    s, z, mask, cond, ll = _make_inputs()
     mask[0, 8:] = False
-    s_out, z_out = trunk(s, z, mask, cond)
+    s_out, z_out = trunk(s, z, mask, cond, ll)
 
     assert torch.all(s_out[0, 8:] == 0.0)
     assert torch.all(z_out[0, 8:, :, :] == 0.0)
@@ -70,15 +73,15 @@ def test_mask_zeroes_padded_positions() -> None:
 
 def test_z_is_not_symmetrised_by_trunk() -> None:
     trunk = _make_trunk()
-    s, z, mask, cond = _make_inputs()
-    _, z_out = trunk(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    _, z_out = trunk(s, z, mask, cond, ll)
     assert not torch.allclose(z_out, z_out.transpose(-3, -2), atol=1e-3)
 
 
 def test_s_layernorm_output_sanity() -> None:
     trunk = _make_trunk()
-    s, z, mask, cond = _make_inputs()
-    s_out, _ = trunk(s, z, mask, cond)
+    s, z, mask, cond, ll = _make_inputs()
+    s_out, _ = trunk(s, z, mask, cond, ll)
 
     valid = s_out[mask]
     per_token_mean = valid.mean(dim=-1)
@@ -90,6 +93,6 @@ def test_s_layernorm_output_sanity() -> None:
 
 def test_cond_required() -> None:
     trunk = _make_trunk()
-    s, z, mask, _ = _make_inputs()
+    s, z, mask, _, _ = _make_inputs()
     with pytest.raises(TypeError):
         trunk(s, z, mask)
