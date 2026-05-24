@@ -7,8 +7,7 @@ for back-compat with callers that already imported them under that path.
 Includes:
     Shared shape-agnostic primitives — `_logits_to_continuous`,
       `_labels_to_continuous`, `pearson_r`, `spearman_r`,
-      `expected_calibration_error`, `expected_calibration_error_adaptive`,
-      `reliability_diagram`.
+      `expected_calibration_error`, `expected_calibration_error_adaptive`.
     pLDDT-specific — `plddt_accuracy`, `plddt_mae`, `plddt_mae_stratified`.
     PAE-specific — `pae_accuracy`, `pae_mae`, `pae_mae_stratified_by_value`,
       `pae_mae_stratified_by_distance`, `pae_ece`, `pae_ece_adaptive`.
@@ -31,7 +30,6 @@ __all__ = [
     "spearman_r",
     "expected_calibration_error",
     "expected_calibration_error_adaptive",
-    "reliability_diagram",
     "plddt_accuracy",
     "plddt_mae",
     "plddt_mae_stratified",
@@ -207,38 +205,6 @@ def expected_calibration_error_adaptive(
         conf_b = (conf * in_bin_f).sum() / n_b
         ece = ece + (n_b / n_total) * (acc_b - conf_b).abs()
     return ece.to(torch.float32)
-
-
-def reliability_diagram(
-    logits: Tensor,
-    labels_bin: Tensor,
-    mask: Tensor,
-    num_bins_ece: int = 10,
-) -> Tensor:
-    """Per-bucket `(conf, acc, count)` table for a reliability plot."""
-    probs = torch.softmax(logits.float(), dim=-1)
-    conf, pred = probs.max(dim=-1)
-    mask_f = mask.to(torch.float32)
-    correct = (pred == labels_bin).to(torch.float32) * mask_f
-
-    edges = torch.linspace(0.0, 1.0, num_bins_ece + 1, device=logits.device)
-    out = torch.zeros((num_bins_ece, 3), device=logits.device, dtype=torch.float32)
-    for i in range(num_bins_ece):
-        lo, hi = edges[i], edges[i + 1]
-        if i == num_bins_ece - 1:
-            in_bin = (conf >= lo) & (conf <= hi)
-        else:
-            in_bin = (conf >= lo) & (conf < hi)
-        in_bin_f = in_bin.to(torch.float32) * mask_f
-        n_b = in_bin_f.sum()
-        if n_b.item() == 0.0:
-            continue
-        conf_b = (conf * in_bin_f).sum() / n_b
-        acc_b = (correct * in_bin_f).sum() / n_b
-        out[i, 0] = conf_b
-        out[i, 1] = acc_b
-        out[i, 2] = n_b
-    return out
 
 
 def plddt_mae_stratified(

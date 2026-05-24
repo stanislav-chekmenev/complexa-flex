@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Single-GPU smoke run for PR-5 verification.
 #
-# Exit criterion: 100 steps complete, `val/plddt/loss_ce` is finite,
-# `val/plddt/ece_adaptive` is logged, and a reliability-diagram artifact appears
-# under the trainer log dir.
+# Exit criterion: 100 steps complete, `val/plddt/loss_ce` is finite, and
+# `val/plddt/ece_adaptive` is logged.
 #
 # Required env vars:
 #   CKPT_DIR     directory containing complexa.ckpt + complexa_ae.ckpt

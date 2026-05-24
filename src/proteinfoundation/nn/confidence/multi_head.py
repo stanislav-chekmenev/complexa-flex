@@ -52,7 +52,6 @@ class MultiHeadConfidence(BaseConfidenceHead):
     output_keys: tuple[str, ...] = ()
     output_name_root: str = "multi"
     expected_trunk_eval_t: float = 0.99
-    reliability_diagram_logits_key: None = None
 
     def __init__(
         self,

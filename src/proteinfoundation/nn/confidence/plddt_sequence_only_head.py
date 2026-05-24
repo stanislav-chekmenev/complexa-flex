@@ -37,7 +37,6 @@ from proteinfoundation.nn.confidence.registry import register_confidence_head
 class SequenceOnlyPLDDTHead(BaseConfidenceHead):
     output_keys: tuple[str, ...] = ("plddt_logits",)
     output_name_root: str = "plddt"
-    reliability_diagram_logits_key: str = "plddt_logits"
 
     def __init__(
         self,

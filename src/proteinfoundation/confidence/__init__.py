@@ -21,7 +21,6 @@ from proteinfoundation.confidence.metrics import (
     plddt_accuracy,
     plddt_mae,
     plddt_mae_stratified,
-    reliability_diagram,
     spearman_r,
 )
 
@@ -37,6 +36,5 @@ __all__ = [
     "plddt_accuracy",
     "plddt_mae",
     "plddt_mae_stratified",
-    "reliability_diagram",
     "spearman_r",
 ]

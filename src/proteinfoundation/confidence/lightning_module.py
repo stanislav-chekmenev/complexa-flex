@@ -43,11 +43,9 @@ from __future__ import annotations
 
 import math
 import warnings
-from pathlib import Path
 from typing import Iterable
 
 import lightning as L
-import numpy as np
 import torch
 from loguru import logger
 from torch import nn
@@ -98,8 +96,6 @@ def _cosine_warmup_factor(
 
 
 class ConfidenceDistillationModule(L.LightningModule):
-    _log_table_warned: bool = False
-
     def __init__(
         self,
         head: BaseConfidenceHead,
@@ -115,8 +111,6 @@ class ConfidenceDistillationModule(L.LightningModule):
         smooth_l1_weight: float = 0.1,
         label_smoothing: float = 0.05,
         num_bins_ece_adaptive: int = 15,
-        reliability_diagram_every_n_epochs: int = 1,
-        reliability_diagram_num_bins: int = 10,
         cond_modalities: tuple[str, ...] | None = None,
         proteina: nn.Module | None = None,
     ) -> None:
@@ -161,12 +155,6 @@ class ConfidenceDistillationModule(L.LightningModule):
                 DeprecationWarning,
                 stacklevel=2,
             )
-        self.reliability_diagram_every_n_epochs = int(reliability_diagram_every_n_epochs)
-        self.reliability_diagram_num_bins = int(reliability_diagram_num_bins)
-        # intentionally not registered as buffers to avoid state_dict pollution
-        self._rd_conf_sum: torch.Tensor | None = None
-        self._rd_correct_sum: torch.Tensor | None = None
-        self._rd_count: torch.Tensor | None = None
 
     @classmethod
     def from_components(
@@ -184,8 +172,6 @@ class ConfidenceDistillationModule(L.LightningModule):
         smooth_l1_weight: float = 0.1,
         label_smoothing: float = 0.05,
         num_bins_ece_adaptive: int = 15,
-        reliability_diagram_every_n_epochs: int = 1,
-        reliability_diagram_num_bins: int = 10,
     ) -> "ConfidenceDistillationModule":
         """Construct without loading from disk. Used by tests and PR-5 smoke."""
         return cls(
@@ -202,8 +188,6 @@ class ConfidenceDistillationModule(L.LightningModule):
             smooth_l1_weight=smooth_l1_weight,
             label_smoothing=label_smoothing,
             num_bins_ece_adaptive=num_bins_ece_adaptive,
-            reliability_diagram_every_n_epochs=reliability_diagram_every_n_epochs,
-            reliability_diagram_num_bins=reliability_diagram_num_bins,
             cond_modalities=tuple(cond_modalities) if cond_modalities is not None else None,
             proteina=proteina,
         )
@@ -482,19 +466,6 @@ class ConfidenceDistillationModule(L.LightningModule):
         first_tensor = self._first_logits_tensor(out["head_out"])
         b = first_tensor.shape[0]
         self._log_head_metrics("val", log_dict, b)
-
-        if not isinstance(self.head, MultiHeadConfidence):
-            diag_key = getattr(self.head, "reliability_diagram_logits_key", None)
-            if diag_key is not None and diag_key in out["head_out"]:
-                labels_bin = out["batch_trimmed"].get(
-                    f"{self.head.output_name_root}_bin"
-                )
-                if labels_bin is not None:
-                    self._accumulate_reliability(
-                        out["head_out"][diag_key].detach(),
-                        labels_bin.detach(),
-                        out["mask_eff"].detach(),
-                    )
         return total
 
     def configure_optimizers(self):
@@ -540,89 +511,3 @@ class ConfidenceDistillationModule(L.LightningModule):
     def on_validation_epoch_start(self) -> None:
         self.proteina.eval()
         self.head.eval()
-        num_bins = self.reliability_diagram_num_bins
-        device = self.device
-        self._rd_conf_sum = torch.zeros(num_bins, dtype=torch.float32, device=device)
-        self._rd_correct_sum = torch.zeros(num_bins, dtype=torch.float32, device=device)
-        self._rd_count = torch.zeros(num_bins, dtype=torch.float32, device=device)
-
-    def _accumulate_reliability(
-        self,
-        logits: torch.Tensor,
-        labels_bin: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> None:
-        if self._rd_count is None:
-            return
-        num_bins = self.reliability_diagram_num_bins
-        probs = torch.softmax(logits.float(), dim=-1)
-        conf, pred = probs.max(dim=-1)
-        mask_f = mask.to(torch.float32)
-        correct = (pred == labels_bin).to(torch.float32) * mask_f
-
-        edges = torch.linspace(0.0, 1.0, num_bins + 1, device=logits.device)
-        for i in range(num_bins):
-            lo, hi = edges[i], edges[i + 1]
-            if i == num_bins - 1:
-                in_bin = (conf >= lo) & (conf <= hi)
-            else:
-                in_bin = (conf >= lo) & (conf < hi)
-            in_bin_f = in_bin.to(torch.float32) * mask_f
-            n_b = in_bin_f.sum()
-            if n_b.item() == 0.0:
-                continue
-            self._rd_conf_sum[i] = self._rd_conf_sum[i] + (conf * in_bin_f).sum()
-            self._rd_correct_sum[i] = self._rd_correct_sum[i] + (correct * in_bin_f).sum()
-            self._rd_count[i] = self._rd_count[i] + n_b
-
-    def on_validation_epoch_end(self) -> None:
-        if self._rd_count is None:
-            return
-        every = max(self.reliability_diagram_every_n_epochs, 1)
-        if (self.current_epoch + 1) % every != 0:
-            return
-
-        conf_sum = self._rd_conf_sum
-        correct_sum = self._rd_correct_sum
-        count = self._rd_count
-        if self.trainer is not None and getattr(self.trainer, "world_size", 1) > 1:
-            strategy = self.trainer.strategy
-            conf_sum = strategy.reduce(conf_sum, reduce_op="sum")
-            correct_sum = strategy.reduce(correct_sum, reduce_op="sum")
-            count = strategy.reduce(count, reduce_op="sum")
-
-        diagram = torch.zeros(
-            (self.reliability_diagram_num_bins, 3), dtype=torch.float32, device=count.device
-        )
-        nonempty = count > 0
-        diagram[nonempty, 0] = conf_sum[nonempty] / count[nonempty]
-        diagram[nonempty, 1] = correct_sum[nonempty] / count[nonempty]
-        diagram[nonempty, 2] = count[nonempty]
-        self._emit_reliability_diagram(diagram.cpu())
-
-    def _emit_reliability_diagram(self, diagram: torch.Tensor) -> None:
-        if self.trainer is not None and self.trainer.global_rank != 0:
-            return
-        epoch = int(self.current_epoch)
-        lightning_logger = getattr(self, "logger", None)
-        log_table = getattr(lightning_logger, "log_table", None) if lightning_logger else None
-        if callable(log_table):
-            try:
-                log_table(
-                    key=f"val/reliability_epoch_{epoch}",
-                    columns=["conf", "acc", "count"],
-                    data=diagram.tolist(),
-                )
-                return
-            except Exception as exc:
-                if not type(self)._log_table_warned:
-                    logger.warning(
-                        f"log_table unavailable, falling back to .npy: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    type(self)._log_table_warned = True
-        log_dir = self.trainer.log_dir if self.trainer is not None else "."
-        out_dir = Path(log_dir) if log_dir else Path(".")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"reliability_epoch_{epoch}.npy"
-        np.save(out_path, diagram.numpy())
