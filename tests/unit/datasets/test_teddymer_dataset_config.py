@@ -138,7 +138,18 @@ def test_config_composes_and_instantiates_datamodule(tmp_path):
     assert dm.__class__.__name__ == "TeddymerDimerDataModule"
 
 
-def test_complexa_filter_drops_the_one_false_row(tmp_path):
+def test_relaxed_filters_drop_only_small_interfaces(tmp_path):
+    """The YAML filter list now expresses the thresholds explicitly:
+    ``interface_length > 10``, ``avg_int_plddt > 30.0``, ``avg_int_pae < 25.0``.
+
+    Against the 4-dimer fake fixture (D1 il=12, D2 il=15, D3 il=8, D4 il=5),
+    only D1 and D2 pass — D3 and D4 are dropped on the interface-length cut.
+    D1/D2's pLDDT (80, 75) and PAE (5, 4) are far inside the relaxed bounds.
+    The fixture's old D3 row (il=8, plddt=71, pae=8) previously slipped through
+    on the legacy ``complexa_filter == True`` rule (which baked plddt>70 + pae<10
+    into the parquet column) but is dropped by the new explicit filter because
+    its interface is too small.
+    """
     dimers_path, locator_path = _build_view(tmp_path)
     cfg = _compose_cfg(dimers_path, locator_path, tmp_path)
 
@@ -147,7 +158,29 @@ def test_complexa_filter_drops_the_one_false_row(tmp_path):
 
     n_train = len(dm.train_dataset)
     n_val = len(dm.val_dataset)
-    assert n_train + n_val == 3
+    assert n_train + n_val == 2
+
+
+def test_yaml_filters_pin_relaxed_thresholds():
+    """Pin the exact filter strings in the YAML so a future edit can't silently
+    drift the cuts. The three thresholds together define the supervised pool;
+    changing any of them changes which dimers the confidence head trains on.
+    """
+    with initialize_config_dir(
+        config_dir=str(CONFIG_DIR / "dataset" / "unified"), version_base="1.3"
+    ):
+        cfg = compose(config_name="teddymer_with_plddt_and_pae")
+
+    filters = list(cfg.datamodule.filters)
+    assert filters == [
+        "interface_length > 10",
+        "avg_int_plddt > 30.0",
+        "avg_int_pae < 25.0",
+    ], (
+        f"Teddymer confidence-distill filter contract drifted. Got {filters}. "
+        "The relaxed thresholds (>30 pLDDT, <25 PAE) replace the Complexa-paper "
+        "defaults (>70 / <10) so the head sees low-confidence interfaces too."
+    )
 
 
 def test_one_train_batch_has_expected_fields_and_dtypes(tmp_path):

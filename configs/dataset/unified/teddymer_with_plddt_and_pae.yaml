@@ -21,8 +21,19 @@ datamodule:
   pin_memory: true
   seed: 0
 
+  # Thresholds are surfaced explicitly here (not via the baked-in
+  # `complexa_filter` boolean column) so the supervised pool can be tuned
+  # per-run via Hydra overrides without rebuilding the 127 GB blob.
+  # Relaxed from the Complexa-paper defaults (10 / 70 / 10) — the legacy
+  # `complexa_filter == True` cut removed 77k low-confidence-interface
+  # dimers and gave the confidence head no supervision in that regime.
+  # The new thresholds (10 / 30 / 25) keep the minimum-interface-size
+  # cut binding but admit the full pLDDT / PAE range present in the view,
+  # so the head learns the decision boundary between high and low quality.
   filters:
-    - "complexa_filter == True"
+    - "interface_length > 10"
+    - "avg_int_plddt > 30.0"
+    - "avg_int_pae < 25.0"
 
   atomarray_transforms: []
 
