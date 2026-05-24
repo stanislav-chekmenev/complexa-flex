@@ -41,6 +41,12 @@ __all__ = [
     "pae_mae_stratified_by_distance",
     "pae_ece",
     "pae_ece_adaptive",
+    "interface_pair_mask",
+    "i_pae",
+    "min_ipae",
+    "iptm_from_logits",
+    "iptm_energy_from_logits",
+    "ipsae_family",
 ]
 
 
@@ -364,6 +370,287 @@ def pae_mae_stratified_by_distance(
         active = bucket_mask.to(torch.float32) * mask_f
         denom = active.sum().clamp_min(1.0)
         out[name] = (ae * active).sum() / denom
+    return out
+
+
+def interface_pair_mask(chain_idx: Tensor, mask_eff: Tensor) -> Tensor:
+    """Pairs that cross a chain boundary AND are valid under `mask_eff`.
+
+    Args:
+        chain_idx: `[B, L]` integer chain identifiers (monomers carry a
+            single id, dimers carry two, etc.).
+        mask_eff: `[B, L, L]` already-AND-ed pair validity (float or bool).
+
+    Returns:
+        `[B, L, L]` bool. True iff `chain_idx[..., i] != chain_idx[..., j]`
+        AND `mask_eff[..., i, j]` is true.
+    """
+    cross_chain = chain_idx[..., None, :] != chain_idx[..., :, None]
+    return cross_chain & mask_eff.bool()
+
+
+def i_pae(pae_ev: Tensor, interface_mask: Tensor) -> Tensor:
+    """Mean PAE expected-value over the cross-chain interface, averaged over samples-with-mass.
+
+    Args:
+        pae_ev: `[B, L, L]` softmax-weighted bin-center mean of the
+            student's PAE logits (continuous EV in Angstroms).
+        interface_mask: `[B, L, L]` cross-chain validity mask.
+
+    Returns:
+        Scalar mean over samples that carry at least one interface pair.
+        Samples with empty interface contribute zero AND are excluded
+        from the denominator (so mixed dimer+monomer batches are not
+        diluted).
+    """
+    mask_f = interface_mask.to(torch.float32)
+    sample_denom = mask_f.sum(dim=(-2, -1))
+    sample_has_mass = sample_denom > 0
+    per_sample = (pae_ev.float() * mask_f).sum(dim=(-2, -1)) / sample_denom.clamp_min(1.0)
+    per_sample = torch.where(sample_has_mass, per_sample, torch.zeros_like(per_sample))
+    n_valid_samples = sample_has_mass.to(torch.float32).sum().clamp_min(1.0)
+    return (per_sample.sum() / n_valid_samples).to(torch.float32)
+
+
+def min_ipae(pae_ev: Tensor, interface_mask: Tensor) -> Tensor:
+    """Min over interface rows of the per-row EV mean, averaged over samples-with-mass.
+
+    Args:
+        pae_ev: `[B, L, L]` continuous PAE expected value.
+        interface_mask: `[B, L, L]` cross-chain validity mask.
+
+    Returns:
+        Scalar mean over samples that carry at least one interface row.
+        Rows with no interface mass are excluded via sentinel substitution
+        before the row-wise min; samples with no interface row contribute
+        zero AND are excluded from the denominator.
+    """
+    mask_f = interface_mask.to(torch.float32)
+    row_denom = mask_f.sum(dim=-1)
+    row_has_mass = row_denom > 0
+    per_row = (pae_ev.float() * mask_f).sum(dim=-1) / row_denom.clamp_min(1.0)
+    per_row_for_min = torch.where(
+        row_has_mass, per_row, torch.full_like(per_row, float("inf"))
+    )
+    sample_has_any_row = row_has_mass.any(dim=-1)
+    per_sample_min = per_row_for_min.min(dim=-1).values
+    per_sample_min = torch.where(
+        sample_has_any_row, per_sample_min, torch.zeros_like(per_sample_min)
+    )
+    n_valid_samples = sample_has_any_row.to(torch.float32).sum().clamp_min(1.0)
+    return (per_sample_min.sum() / n_valid_samples).to(torch.float32)
+
+
+def _per_row_tm_score(
+    logits: Tensor,
+    row_mask: Tensor,
+    n_valid: Tensor,
+    bin_centers: Tensor,
+    *,
+    d0_clip_min: int,
+) -> Tensor:
+    """Per-row TM-score-style aggregate using per-sample `d0`.
+
+    `n_valid` is `[B]`; `d0` therefore varies per sample. The broadcast
+    pattern is `d0[:, None]` for the K axis (per-sample weighting) and
+    `w[:, None, None, :]` to multiply against `[B, L, L, K]` softmax
+    probabilities. The non-obviousness is exactly that broadcast: a
+    naive `bin_centers / d0` (both 1D) would collapse the batch axis.
+    """
+    centers = bin_centers.to(logits.device, torch.float32)
+    n_eff = n_valid.to(torch.float32).clamp_min(float(d0_clip_min))
+    d0 = 1.24 * (n_eff - 15.0).clamp_min(0.0).pow(1.0 / 3.0) - 1.8
+    w = 1.0 / (1.0 + (centers[None, :] / d0[:, None]).pow(2))
+    probs = torch.softmax(logits.float(), dim=-1)
+    score_ij = (probs * w[:, None, None, :]).sum(dim=-1)
+    row_mask_f = row_mask.to(torch.float32)
+    row_denom = row_mask_f.sum(dim=-1).clamp_min(1.0)
+    return (score_ij * row_mask_f).sum(dim=-1) / row_denom
+
+
+def _per_sample_n_valid(mask_eff: Tensor) -> Tensor:
+    """Residue count per sample inferred from the pair mask.
+
+    A residue is "valid" if it participates in any valid pair; for the
+    standard `mask_eff = m[:, None] & m[:, :, None]` construction this
+    is identical to `m.sum(-1)`.
+    """
+    mb = mask_eff.bool()
+    assert torch.equal(mb, mb.transpose(-1, -2)), (
+        "mask_eff must be symmetric in the standard residue-pair construction"
+    )
+    return mb.any(dim=-1).sum(dim=-1)
+
+
+def iptm_from_logits(
+    logits: Tensor,
+    mask_eff: Tensor,
+    interface_mask: Tensor,
+    bin_centers: Tensor,
+    *,
+    d0_clip_min: int = 19,
+) -> Tensor:
+    """ipTM = mean over samples of (max over interface rows of per-row TM score)."""
+    n_valid = _per_sample_n_valid(mask_eff)
+    per_row = _per_row_tm_score(
+        logits, interface_mask, n_valid, bin_centers, d0_clip_min=d0_clip_min
+    )
+    row_has_mass = interface_mask.to(torch.float32).sum(dim=-1) > 0
+    per_row_masked = torch.where(
+        row_has_mass, per_row, torch.full_like(per_row, float("-inf"))
+    )
+    sample_has_any_row = row_has_mass.any(dim=-1)
+    per_sample_max = per_row_masked.max(dim=-1).values
+    per_sample_max = torch.where(
+        sample_has_any_row, per_sample_max, torch.zeros_like(per_sample_max)
+    )
+    n_valid_samples = sample_has_any_row.to(torch.float32).sum().clamp_min(1.0)
+    return (per_sample_max.sum() / n_valid_samples).to(torch.float32)
+
+
+def iptm_energy_from_logits(
+    logits: Tensor,
+    mask_eff: Tensor,
+    interface_mask: Tensor,
+    bin_centers: Tensor,
+    *,
+    tm_lambda: float = 1.0,
+    d0_clip_min: int = 19,
+) -> Tensor:
+    """Log-sum-exp energy variant of ipTM. Returns per-batch mean energy.
+
+    For each pair, `energy_ij = -logsumexp(logits_ij + lambda * log w)`.
+    Averaged over the interface mask per-sample, then across samples
+    that have at least one interface pair.
+    """
+    centers = bin_centers.to(logits.device, torch.float32)
+    n_valid = _per_sample_n_valid(mask_eff)
+    n_eff = n_valid.to(torch.float32).clamp_min(float(d0_clip_min))
+    d0 = 1.24 * (n_eff - 15.0).clamp_min(0.0).pow(1.0 / 3.0) - 1.8
+    w = 1.0 / (1.0 + (centers[None, :] / d0[:, None]).pow(2))
+    log_w = w.log()
+    weighted_logits = logits.float() + tm_lambda * log_w[:, None, None, :]
+    pos_energy = -torch.logsumexp(weighted_logits, dim=-1)
+    mask_f = interface_mask.to(torch.float32)
+    sample_denom = mask_f.sum(dim=(-2, -1))
+    per_sample = (pos_energy * mask_f).sum(dim=(-2, -1)) / sample_denom.clamp_min(1.0)
+    sample_has_mass = sample_denom > 0
+    per_sample = torch.where(sample_has_mass, per_sample, torch.zeros_like(per_sample))
+    n_valid_samples = sample_has_mass.to(torch.float32).sum().clamp_min(1.0)
+    return (per_sample.sum() / n_valid_samples).to(torch.float32)
+
+
+def _calc_d0_colabdesign(L: Tensor) -> Tensor:
+    """colabdesign-compatible per-row d0 from filtered count.
+
+    Mirrors `calc_d0` at community_models/colabdesign/af/loss.py:288-291:
+        L_eff = clamp_min(L, 27)
+        d0    = 1.24 * (L_eff - 15) ** (1/3) - 1.8
+        d0    = clamp_min(d0, 1.0)
+    """
+    L_eff = L.to(torch.float32).clamp_min(27.0)
+    d0 = 1.24 * (L_eff - 15.0).pow(1.0 / 3.0) - 1.8
+    return d0.clamp_min(1.0)
+
+
+def _ipsae_directional(
+    pae_ev: Tensor,
+    src_id: Tensor,
+    tgt_id: Tensor,
+    pae_cutoff: float,
+) -> tuple[Tensor, Tensor]:
+    """One direction of the colabdesign ipSAE kernel.
+
+    Returns `(per_sample, has_mass)` where:
+        per_sample: `[B]` directional ipSAE score (mean over filtered
+            row max — colabdesign takes `mean_tm.max()` per sample).
+        has_mass: `[B]` bool, True iff this direction has any
+            cutoff-passing inter-chain pair.
+
+    Filter `pae_mask_2d = src[:, :, None] * tgt[:, None, :] * (pae < cutoff)`
+    matches colabdesign's `mask_1b[:, None] * mask_1d[None, :] * (p < cutoff)`.
+    """
+    pae = pae_ev.float()
+    src_f = src_id.to(torch.float32)
+    tgt_f = tgt_id.to(torch.float32)
+    pae_mask_2d = src_f[:, :, None] * tgt_f[:, None, :] * (pae < pae_cutoff).to(torch.float32)
+    row_count = pae_mask_2d.sum(dim=-1)
+    d0 = _calc_d0_colabdesign(row_count)
+    tm_term = 1.0 / (1.0 + pae.pow(2) / d0[..., None].pow(2))
+    mean_tm = (pae_mask_2d * tm_term).sum(dim=-1) / (row_count + 1e-8)
+    per_sample = mean_tm.max(dim=-1).values
+    has_mass = pae_mask_2d.sum(dim=(-2, -1)) > 0
+    return per_sample, has_mass
+
+
+def ipsae_family(
+    pae_ev: Tensor,
+    chain_idx: Tensor,
+    mask_eff: Tensor,
+    *,
+    pae_cutoffs: tuple[float, float] = (15.0, 10.0),
+) -> dict[str, Tensor]:
+    """colabdesign-compatible ipSAE family.
+
+    Mirrors `get_ipsae_loss` at community_models/colabdesign/af/loss.py:314-339.
+    For each PAE cutoff (base = 15.0 A for AF2, _10 = 10.0 A for AF3/Boltz):
+        1. Build the cutoff-filtered inter-chain mask in both directions
+           (B->A: tgt rows x src cols; A->B: swapped).
+        2. Per row, count filtered columns, compute `d0` via
+           `_calc_d0_colabdesign` (L>=27 then d0>=1.0 clip).
+        3. TM kernel: `tm = 1 / (1 + pae^2 / d0^2)`, weighted-mean per
+           row over filtered columns with `+ 1e-8` additive denominator
+           (colabdesign convention, not `clamp_min`).
+        4. Per direction, take `mean_tm.max()` over rows; aggregate the
+           two directions per sample as `{min, max, avg}`.
+        5. Batch reduction averages over samples with mass (i.e. samples
+           with at least one cutoff-passing inter-chain pair in either
+           direction); empty samples contribute zero and are excluded
+           from the denominator.
+
+    Dimer convention: Teddymer dimers always have `chain_idx in {0, 1}`.
+    Binder := chain 0, target := chain 1. The metric is symmetric in
+    the chain assignment because the {min, max, avg} aggregation over
+    the two directions is symmetric — swapping 0<->1 leaves the output
+    unchanged.
+
+    Args:
+        pae_ev: `[B, L, L]` student continuous PAE expected value.
+        chain_idx: `[B, L]` integer chain identifiers.
+        mask_eff: `[B, L, L]` already-AND-ed pair validity mask. Combined
+            with the chain split to drop padded residues from the chain
+            indicator vectors.
+        pae_cutoffs: `(base, _10)` Angstroms. AF2 default is 15.0;
+            AF3/Boltz use 10.0 (colabdesign comment).
+
+    Returns:
+        `{avg_ipsae, min_ipsae, max_ipsae, avg_ipsae_10, min_ipsae_10,
+         max_ipsae_10}`, each scalar.
+    """
+    res_valid = mask_eff.bool().any(dim=-1).to(torch.float32)
+    binder_id = (chain_idx == 0).to(torch.float32) * res_valid
+    target_id = (chain_idx == 1).to(torch.float32) * res_valid
+
+    out: dict[str, Tensor] = {}
+    base_cutoff, ten_cutoff = float(pae_cutoffs[0]), float(pae_cutoffs[1])
+    for cutoff, suffix in ((base_cutoff, ""), (ten_cutoff, "_10")):
+        ipsae_ba, mass_ba = _ipsae_directional(pae_ev, target_id, binder_id, cutoff)
+        ipsae_ab, mass_ab = _ipsae_directional(pae_ev, binder_id, target_id, cutoff)
+        sample_has_mass = mass_ba | mass_ab
+
+        min_per = torch.minimum(ipsae_ab, ipsae_ba)
+        max_per = torch.maximum(ipsae_ab, ipsae_ba)
+        avg_per = 0.5 * (ipsae_ab + ipsae_ba)
+
+        zeros = torch.zeros_like(avg_per)
+        min_per = torch.where(sample_has_mass, min_per, zeros)
+        max_per = torch.where(sample_has_mass, max_per, zeros)
+        avg_per = torch.where(sample_has_mass, avg_per, zeros)
+
+        n_valid = sample_has_mass.to(torch.float32).sum().clamp_min(1.0)
+        out[f"avg_ipsae{suffix}"] = (avg_per.sum() / n_valid).to(torch.float32)
+        out[f"min_ipsae{suffix}"] = (min_per.sum() / n_valid).to(torch.float32)
+        out[f"max_ipsae{suffix}"] = (max_per.sum() / n_valid).to(torch.float32)
     return out
 
 
