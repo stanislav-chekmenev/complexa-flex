@@ -39,6 +39,7 @@ trainer:
   val_check_interval: 2000
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: ${oc.env:RUN_DIR,runs/local}/checkpoints
       monitor: "val/pae/loss_ce"
       mode: "min"
       save_top_k: 3

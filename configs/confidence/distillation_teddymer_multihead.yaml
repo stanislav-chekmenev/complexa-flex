@@ -69,6 +69,7 @@ trainer:
   val_check_interval: 1000
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: ${oc.env:RUN_DIR,runs/local}/checkpoints
       monitor: "val/multi/total"
       mode: "min"
       save_top_k: 3

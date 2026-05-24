@@ -24,6 +24,7 @@ trainer:
   check_val_every_n_epoch: 1
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: ${oc.env:RUN_DIR,runs/local}/checkpoints
       monitor: "val/plddt/loss_ce"
       mode: "min"
       save_top_k: 3

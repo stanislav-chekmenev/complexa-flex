@@ -130,7 +130,11 @@ export DATA_PATH="$DATA_ROOT"
 export CKPT_DIR="$CKPT_DIR_DST"
 
 # --- Run directory for outputs ---
-RUN_DIR="$DATA_ROOT/runs/${SLURM_JOB_ID:-local}"
+# Exported so the ModelCheckpoint.dirpath in confidence configs
+# (`${oc.env:RUN_DIR,...}/checkpoints`) resolves under srun. Without
+# `export`, the var is shell-local and the spawned python sees nothing,
+# so checkpoints fall back to Lightning's default cwd-relative path.
+export RUN_DIR="$DATA_ROOT/runs/${SLURM_JOB_ID:-local}"
 mkdir -p "$RUN_DIR"
 
 echo ""
