@@ -355,41 +355,58 @@ def interface_pair_mask(chain_idx: Tensor, mask_eff: Tensor) -> Tensor:
     return cross_chain & mask_eff.bool()
 
 
-def i_pae(pae_ev: Tensor, interface_mask: Tensor) -> Tensor:
-    """Mean PAE expected-value over the cross-chain interface, averaged over samples-with-mass.
+def i_pae(
+    pae_ev: Tensor,
+    interface_mask: Tensor,
+    *,
+    reduce: str = "batch_mean",
+) -> Tensor:
+    """Mean PAE expected-value over the cross-chain interface.
 
     Args:
         pae_ev: `[B, L, L]` softmax-weighted bin-center mean of the
             student's PAE logits (continuous EV in Angstroms).
         interface_mask: `[B, L, L]` cross-chain validity mask.
+        reduce: `"batch_mean"` (default, scalar) or `"per_sample"`
+            (returns `[B]` with NaN at samples-without-mass).
 
     Returns:
-        Scalar mean over samples that carry at least one interface pair.
-        Samples with empty interface contribute zero AND are excluded
-        from the denominator (so mixed dimer+monomer batches are not
-        diluted).
+        Either a scalar mean over samples that carry at least one
+        interface pair, or a `[B]` per-sample tensor with NaN sentinels
+        on no-mass samples.
     """
     mask_f = interface_mask.to(torch.float32)
     sample_denom = mask_f.sum(dim=(-2, -1))
     sample_has_mass = sample_denom > 0
     per_sample = (pae_ev.float() * mask_f).sum(dim=(-2, -1)) / sample_denom.clamp_min(1.0)
+    if reduce == "per_sample":
+        return torch.where(sample_has_mass, per_sample, torch.full_like(per_sample, float("nan")))
+    if reduce != "batch_mean":
+        raise ValueError(f"reduce must be 'batch_mean' or 'per_sample', got {reduce!r}")
     per_sample = torch.where(sample_has_mass, per_sample, torch.zeros_like(per_sample))
     n_valid_samples = sample_has_mass.to(torch.float32).sum().clamp_min(1.0)
     return (per_sample.sum() / n_valid_samples).to(torch.float32)
 
 
-def min_ipae(pae_ev: Tensor, interface_mask: Tensor) -> Tensor:
-    """Min over interface rows of the per-row EV mean, averaged over samples-with-mass.
+def min_ipae(
+    pae_ev: Tensor,
+    interface_mask: Tensor,
+    *,
+    reduce: str = "batch_mean",
+) -> Tensor:
+    """Min over interface rows of the per-row EV mean.
 
     Args:
         pae_ev: `[B, L, L]` continuous PAE expected value.
         interface_mask: `[B, L, L]` cross-chain validity mask.
+        reduce: `"batch_mean"` (default, scalar) or `"per_sample"`
+            (returns `[B]` with NaN at samples-without-mass).
 
     Returns:
-        Scalar mean over samples that carry at least one interface row.
-        Rows with no interface mass are excluded via sentinel substitution
-        before the row-wise min; samples with no interface row contribute
-        zero AND are excluded from the denominator.
+        Either a scalar mean over samples that carry at least one
+        interface row, or a `[B]` per-sample tensor with NaN sentinels.
+        Rows with no interface mass are excluded via sentinel
+        substitution before the row-wise min.
     """
     mask_f = interface_mask.to(torch.float32)
     row_denom = mask_f.sum(dim=-1)
@@ -400,6 +417,12 @@ def min_ipae(pae_ev: Tensor, interface_mask: Tensor) -> Tensor:
     )
     sample_has_any_row = row_has_mass.any(dim=-1)
     per_sample_min = per_row_for_min.min(dim=-1).values
+    if reduce == "per_sample":
+        return torch.where(
+            sample_has_any_row, per_sample_min, torch.full_like(per_sample_min, float("nan"))
+        )
+    if reduce != "batch_mean":
+        raise ValueError(f"reduce must be 'batch_mean' or 'per_sample', got {reduce!r}")
     per_sample_min = torch.where(
         sample_has_any_row, per_sample_min, torch.zeros_like(per_sample_min)
     )
@@ -455,6 +478,7 @@ def iptm_from_logits(
     bin_centers: Tensor,
     *,
     d0_clip_min: int = 19,
+    reduce: str = "batch_mean",
 ) -> Tensor:
     """ipTM = mean over samples of (max over interface rows of per-row TM score)."""
     n_valid = _per_sample_n_valid(mask_eff)
@@ -467,6 +491,12 @@ def iptm_from_logits(
     )
     sample_has_any_row = row_has_mass.any(dim=-1)
     per_sample_max = per_row_masked.max(dim=-1).values
+    if reduce == "per_sample":
+        return torch.where(
+            sample_has_any_row, per_sample_max, torch.full_like(per_sample_max, float("nan"))
+        )
+    if reduce != "batch_mean":
+        raise ValueError(f"reduce must be 'batch_mean' or 'per_sample', got {reduce!r}")
     per_sample_max = torch.where(
         sample_has_any_row, per_sample_max, torch.zeros_like(per_sample_max)
     )
@@ -482,6 +512,7 @@ def iptm_energy_from_logits(
     *,
     tm_lambda: float = 1.0,
     d0_clip_min: int = 19,
+    reduce: str = "batch_mean",
 ) -> Tensor:
     """Log-sum-exp energy variant of ipTM. Returns per-batch mean energy.
 
@@ -501,6 +532,10 @@ def iptm_energy_from_logits(
     sample_denom = mask_f.sum(dim=(-2, -1))
     per_sample = (pos_energy * mask_f).sum(dim=(-2, -1)) / sample_denom.clamp_min(1.0)
     sample_has_mass = sample_denom > 0
+    if reduce == "per_sample":
+        return torch.where(sample_has_mass, per_sample, torch.full_like(per_sample, float("nan")))
+    if reduce != "batch_mean":
+        raise ValueError(f"reduce must be 'batch_mean' or 'per_sample', got {reduce!r}")
     per_sample = torch.where(sample_has_mass, per_sample, torch.zeros_like(per_sample))
     n_valid_samples = sample_has_mass.to(torch.float32).sum().clamp_min(1.0)
     return (per_sample.sum() / n_valid_samples).to(torch.float32)
@@ -555,6 +590,7 @@ def ipsae_family(
     mask_eff: Tensor,
     *,
     pae_cutoffs: tuple[float, float] = (15.0, 10.0),
+    reduce: str = "batch_mean",
 ) -> dict[str, Tensor]:
     """colabdesign-compatible ipSAE family.
 
@@ -593,6 +629,8 @@ def ipsae_family(
         `{avg_ipsae, min_ipsae, max_ipsae, avg_ipsae_10, min_ipsae_10,
          max_ipsae_10}`, each scalar.
     """
+    if reduce not in ("batch_mean", "per_sample"):
+        raise ValueError(f"reduce must be 'batch_mean' or 'per_sample', got {reduce!r}")
     res_valid = mask_eff.bool().any(dim=-1).to(torch.float32)
     binder_id = (chain_idx == 0).to(torch.float32) * res_valid
     target_id = (chain_idx == 1).to(torch.float32) * res_valid
@@ -607,6 +645,13 @@ def ipsae_family(
         min_per = torch.minimum(ipsae_ab, ipsae_ba)
         max_per = torch.maximum(ipsae_ab, ipsae_ba)
         avg_per = 0.5 * (ipsae_ab + ipsae_ba)
+
+        if reduce == "per_sample":
+            nan = torch.full_like(avg_per, float("nan"))
+            out[f"avg_ipsae{suffix}"] = torch.where(sample_has_mass, avg_per, nan)
+            out[f"min_ipsae{suffix}"] = torch.where(sample_has_mass, min_per, nan)
+            out[f"max_ipsae{suffix}"] = torch.where(sample_has_mass, max_per, nan)
+            continue
 
         zeros = torch.zeros_like(avg_per)
         min_per = torch.where(sample_has_mass, min_per, zeros)

@@ -77,6 +77,27 @@ def _autodetect_cond_modalities(cond_factory: nn.Module) -> tuple[str, ...]:
     return tuple(modalities)
 
 
+def _log_metric_correlations_for_head(head, *, prefix: str, log_fn) -> None:
+    """Compute, log, and reset the head's metric-correlation collections.
+
+    `head` may be any head exposing `track_metric_correlations` and
+    `val_metric_correlations_compute_and_reset`. `log_fn(key, value,
+    sync_dist=False)` is the LightningModule's `self.log` or a stub for
+    testing -- `sync_dist=False` because `torchmetrics.MetricCollection`
+    aggregates state across ranks inside `compute()` already; a second
+    Lightning all-reduce would double-reduce.
+    """
+    if not getattr(head, "track_metric_correlations", False):
+        return
+    compute_fn = getattr(head, "val_metric_correlations_compute_and_reset", None)
+    if compute_fn is None:
+        return
+    agg = compute_fn()
+    for metric_name, stats in agg.items():
+        for stat_name, value in stats.items():
+            log_fn(f"{prefix}/{metric_name}/{stat_name}", value, sync_dist=False)
+
+
 def _cosine_warmup_factor(
     step: int,
     warmup_steps: int,
@@ -527,3 +548,19 @@ class ConfidenceDistillationModule(L.LightningModule):
     def on_validation_epoch_start(self) -> None:
         self.proteina.eval()
         self.head.eval()
+
+    def on_validation_epoch_end(self) -> None:
+        """Log per-head metric-correlation aggregates and reset accumulators."""
+        if isinstance(self.head, MultiHeadConfidence):
+            for _, child in self.head.children_heads.items():
+                _log_metric_correlations_for_head(
+                    child,
+                    prefix=f"val/{child.output_name_root}",
+                    log_fn=self.log,
+                )
+        else:
+            _log_metric_correlations_for_head(
+                self.head,
+                prefix=f"val/{self.head.output_name_root}",
+                log_fn=self.log,
+            )
