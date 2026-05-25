@@ -332,6 +332,14 @@ class PaeHead(BaseConfidenceHead):
                     logits, mask_eff, inter, centers
                 )
                 log_dict.update(ipsae_family(pred_cont, chain_idx, mask_eff))
+                if self.track_metric_correlations:
+                    pae_ev_gt = self._pae_ev_from_labels(labels_bin)
+                    self.update_metric_correlations(
+                        pae_ev_pred=pred_cont,
+                        pae_ev_gt=pae_ev_gt,
+                        chain_idx=chain_idx,
+                        mask_eff=mask_eff,
+                    )
         return total, log_dict
 
     @staticmethod
