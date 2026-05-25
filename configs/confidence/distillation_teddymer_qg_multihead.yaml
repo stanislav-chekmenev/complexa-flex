@@ -30,7 +30,7 @@ confidence:
       ca_pair_dist_max: 3.0
     backbone:
       _target_: proteinfoundation.nn.confidence.qg_pairformer_stack.QgPairformerStack
-      n_layers: 4
+      n_layers: 7
       s_dim: 384
       z_dim: 128
       num_heads: 16
