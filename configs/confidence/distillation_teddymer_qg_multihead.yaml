@@ -34,6 +34,8 @@ confidence:
       s_dim: 384
       z_dim: 128
       num_heads: 16
+      chunk_size_tri_attn: 128
+      gradient_checkpointing: true
     children:
       plddt:
         _target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
