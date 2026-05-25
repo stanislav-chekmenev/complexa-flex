@@ -116,14 +116,29 @@ class PaeHead(BaseConfidenceHead):
         logits = logits * pair_mask[..., None]
         return {"pae_logits": logits}
 
-    def logits_to_expected_value(self, logits: torch.Tensor) -> torch.Tensor:
-        """Softmax-weighted bin-center mean, fp32 internally.
+    def pae_ev_from_logits(self, logits: torch.Tensor) -> torch.Tensor:
+        """Softmax-weighted bin-center mean of the student's PAE logits.
 
-        Returns `(B, L, L)` in `[bin_min, bin_max)`.
+        fp32 internally regardless of input dtype. Returns `(B, L, L)`
+        in `[bin_min, bin_max)`.
         """
         logits_f = logits.float()
         probs = torch.softmax(logits_f, dim=-1)
         return (probs * self.bin_centers).sum(dim=-1)
+
+    def _pae_ev_from_labels(self, pae_bin: torch.Tensor) -> torch.Tensor:
+        """Bin-center lookup for AFDB integer-A bin labels.
+
+        Mirrors `_labels_to_continuous(pae_bin, self.bin_centers)` but lives
+        on the head so callers (including the metric-correlation pipeline)
+        use a single canonical source of GT EV without leaking the head's
+        bin convention into the Lightning module.
+        """
+        return self.bin_centers.to(pae_bin.device, torch.float32)[pae_bin]
+
+    def logits_to_expected_value(self, logits: torch.Tensor) -> torch.Tensor:
+        """Back-compat alias for `pae_ev_from_logits`. Do not use in new code."""
+        return self.pae_ev_from_logits(logits)
 
     def compute_loss_and_metrics(
         self,
