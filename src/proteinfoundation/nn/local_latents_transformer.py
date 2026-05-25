@@ -325,10 +325,13 @@ class LocalLatentsTransformer(torch.nn.Module):
         local_latents_out = self.local_latents_linear(seqs) * mask[..., None]  # [b, n_extended, latent_dim]
         ca_nm_out = self.ca_linear(seqs) * mask[..., None]  # [b, n_extended, 3]
 
-        # Snapshot pre-trim n_extended local_latents for the confidence-distill
-        # sidecar; consumers of `nn_out["local_latents"]` still see the trimmed
-        # `[b, n_orig, latent_dim]` tensor below.
+        # Snapshot pre-trim n_extended local_latents and ca_coords for the
+        # confidence-distill sidecar (quality-graft-style adaptor consumes
+        # ca_coords as a Cα-Cα distogram). Consumers of `nn_out["local_latents"]`
+        # and `nn_out["bb_ca"]` still see the trimmed `[b, n_orig, *]` tensors
+        # below.
         local_latents_extended = local_latents_out
+        ca_coords_extended = ca_nm_out
 
         # Trim back to original sequence length (remove concat features) if we extended
         if n_concat > 0:
@@ -345,6 +348,7 @@ class LocalLatentsTransformer(torch.nn.Module):
             "orig_mask": orig_mask,
             "n_orig": int(n_orig),
             "local_latents": local_latents_extended,
+            "ca_coords": ca_coords_extended,
         }
 
         nn_out = {}
