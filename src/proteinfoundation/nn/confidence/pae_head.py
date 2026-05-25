@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torchmetrics import MeanAbsoluteError, MetricCollection, PearsonCorrCoef, SpearmanCorrCoef
 
 from proteinfoundation.nn.confidence._losses import combined_pae_loss
 from proteinfoundation.nn.confidence._metrics import (
@@ -65,6 +66,19 @@ class PaeHead(BaseConfidenceHead):
     output_name_root: str = "pae"
     expected_trunk_eval_t: float = 0.99
 
+    METRIC_CORRELATION_NAMES: tuple[str, ...] = (
+        "i_pae",
+        "min_ipae",
+        "i_ptm",
+        "i_ptm_energy",
+        "avg_ipsae",
+        "min_ipsae",
+        "max_ipsae",
+        "avg_ipsae_10",
+        "min_ipsae_10",
+        "max_ipsae_10",
+    )
+
     def __init__(
         self,
         trunk: ConfidenceTrunk,
@@ -78,6 +92,7 @@ class PaeHead(BaseConfidenceHead):
         label_smoothing: float = 0.0,
         num_bins_ece_adaptive: int = 15,
         d_in_pair_token: int | None = None,
+        track_metric_correlations: bool = True,
     ) -> None:
         super().__init__(trunk=trunk, token_dim=token_dim, pair_repr_dim=pair_repr_dim)
         if num_pae_bins <= 0:
@@ -103,6 +118,22 @@ class PaeHead(BaseConfidenceHead):
             dtype=torch.float32,
         )
         self.register_buffer("bin_centers", centers, persistent=False)
+
+        self.track_metric_correlations = bool(track_metric_correlations)
+        if self.track_metric_correlations:
+            self.val_metric_correlations = nn.ModuleDict(
+                {
+                    name: MetricCollection(
+                        {
+                            "mae": MeanAbsoluteError(),
+                            "pearson": PearsonCorrCoef(),
+                            "spearman": SpearmanCorrCoef(),
+                        },
+                        compute_groups=False,
+                    )
+                    for name in self.METRIC_CORRELATION_NAMES
+                }
+            )
 
     def _predict(
         self,
@@ -139,6 +170,94 @@ class PaeHead(BaseConfidenceHead):
     def logits_to_expected_value(self, logits: torch.Tensor) -> torch.Tensor:
         """Back-compat alias for `pae_ev_from_logits`. Do not use in new code."""
         return self.pae_ev_from_logits(logits)
+
+    def update_metric_correlations(
+        self,
+        pae_ev_pred: torch.Tensor,
+        pae_ev_gt: torch.Tensor,
+        chain_idx: torch.Tensor,
+        mask_eff: torch.Tensor,
+    ) -> None:
+        """Update the per-sample (pred, gt) metric-collection accumulators.
+
+        Called from `compute_loss_and_metrics` at val stage. The GT and
+        predicted EVs are computed once in fp32 by the caller; this method
+        owns the per-sample metric extraction and the torchmetrics
+        accumulator updates.
+        """
+        if not self.track_metric_correlations:
+            return
+
+        inter = interface_pair_mask(chain_idx, mask_eff)
+        per_pred: dict[str, torch.Tensor] = {}
+        per_gt: dict[str, torch.Tensor] = {}
+        per_pred["i_pae"] = i_pae(pae_ev_pred, inter, reduce="per_sample")
+        per_gt["i_pae"] = i_pae(pae_ev_gt, inter, reduce="per_sample")
+        per_pred["min_ipae"] = min_ipae(pae_ev_pred, inter, reduce="per_sample")
+        per_gt["min_ipae"] = min_ipae(pae_ev_gt, inter, reduce="per_sample")
+
+        # iptm / iptm_energy need bin logits; synthesise sharp one-hot logits
+        # from the EVs so the GT side flows through the same kernel and
+        # inherits the per-sample d0(L) shape and the LSE energy reduction.
+        # Magnitudes are chosen large enough to make softmax effectively
+        # one-hot (within 1e-13) but small enough that the LSE energy stays
+        # in fp32-representable territory (extreme +/-1e9 collapses energy
+        # variance below fp32 resolution and breaks Pearson on i_ptm_energy).
+        pred_bin = torch.bucketize(pae_ev_pred, self.bin_centers[:-1])
+        gt_bin = torch.bucketize(pae_ev_gt, self.bin_centers[:-1])
+        K = self.num_pae_bins
+        pred_logits = torch.full(
+            (*pred_bin.shape, K), -30.0, device=pred_bin.device, dtype=torch.float32
+        )
+        pred_logits.scatter_(-1, pred_bin[..., None], 30.0)
+        gt_logits = torch.full(
+            (*gt_bin.shape, K), -30.0, device=gt_bin.device, dtype=torch.float32
+        )
+        gt_logits.scatter_(-1, gt_bin[..., None], 30.0)
+        per_pred["i_ptm"] = iptm_from_logits(
+            pred_logits, mask_eff, inter, self.bin_centers, reduce="per_sample"
+        )
+        per_gt["i_ptm"] = iptm_from_logits(
+            gt_logits, mask_eff, inter, self.bin_centers, reduce="per_sample"
+        )
+        per_pred["i_ptm_energy"] = iptm_energy_from_logits(
+            pred_logits, mask_eff, inter, self.bin_centers, reduce="per_sample"
+        )
+        per_gt["i_ptm_energy"] = iptm_energy_from_logits(
+            gt_logits, mask_eff, inter, self.bin_centers, reduce="per_sample"
+        )
+
+        ipsae_pred = ipsae_family(pae_ev_pred, chain_idx, mask_eff, reduce="per_sample")
+        ipsae_gt = ipsae_family(pae_ev_gt, chain_idx, mask_eff, reduce="per_sample")
+        for k in ipsae_pred:
+            per_pred[k] = ipsae_pred[k]
+            per_gt[k] = ipsae_gt[k]
+
+        for name, mc in self.val_metric_correlations.items():
+            pred_v = per_pred[name]
+            gt_v = per_gt[name]
+            keep = ~(torch.isnan(pred_v) | torch.isnan(gt_v))
+            if not bool(keep.any()):
+                continue
+            mc.update(pred_v[keep].float(), gt_v[keep].float())
+
+    def val_metric_correlations_compute_and_reset(self) -> dict[str, dict[str, float]]:
+        """Compute and reset every collection. Empty collections yield NaN."""
+        out: dict[str, dict[str, float]] = {}
+        if not self.track_metric_correlations:
+            return out
+        for name, mc in self.val_metric_correlations.items():
+            try:
+                vals = mc.compute()
+                out[name] = {k: float(v) for k, v in vals.items()}
+            except Exception:
+                out[name] = {
+                    "mae": float("nan"),
+                    "pearson": float("nan"),
+                    "spearman": float("nan"),
+                }
+            mc.reset()
+        return out
 
     def compute_loss_and_metrics(
         self,
