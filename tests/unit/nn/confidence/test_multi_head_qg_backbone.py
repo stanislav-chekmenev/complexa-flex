@@ -126,3 +126,41 @@ def test_multi_head_runs_one_backward_pass():
     )
     loss.backward()
     assert any(p.grad is not None for p in head.parameters())
+
+
+def test_placeholder_trunks_dropped_from_children():
+    """Pin the load-bearing trunk-pop in `MultiHeadConfidence.__init__`.
+
+    Hydra has to satisfy `BaseConfidenceHead.__init__`'s `trunk:` arg, so
+    the yaml ships a placeholder `ConfidenceTrunk` per child. Under the
+    qg-style wrapper that trunk is dead weight (~800 MB at full dims)
+    and the wrapper's `__init__` pops it from each child's `_modules`.
+    A future refactor that re-attaches a trunk under any name would
+    silently re-introduce the leak into the optimizer / DDP all-reduce
+    set / checkpoint state_dict — only catchable on a GPU smoke node
+    with full ckpts staged. Pin the invariant here in the fast suite.
+    """
+    head = _build_head()
+
+    # 1. Each child's _modules has no "trunk" entry after construction.
+    for name, child in head.children_heads.items():
+        assert "trunk" not in child._modules, (
+            f"child {name!r} still carries `trunk` in _modules; "
+            f"placeholder leaked into optimizer / DDP / checkpoint surface."
+        )
+
+    # 2. state_dict() has no `children_heads.<name>.trunk.*` keys.
+    leaked = [
+        k for k in head.state_dict().keys()
+        if k.startswith("children_heads.") and ".trunk." in k
+    ]
+    assert not leaked, f"trunk params leaked into state_dict: {leaked[:5]}"
+
+    # 3. named_parameters() has no trunk params under any child.
+    leaked_params = [
+        n for n, _ in head.children_heads.named_parameters() if ".trunk." in n
+    ]
+    assert not leaked_params, (
+        f"trunk params leaked into children_heads.named_parameters(): "
+        f"{leaked_params[:5]}"
+    )
