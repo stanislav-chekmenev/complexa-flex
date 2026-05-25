@@ -1,20 +1,14 @@
-"""Multi-head confidence wrapper (PR-B Slice 3).
+"""Multi-head confidence wrapper (quality-graft-style backbone).
 
-`MultiHeadConfidence` is itself a registered `BaseConfidenceHead`. It owns
-the shared `ConfidenceTrunk`, holds an `nn.ModuleDict` of child heads, and
-runs the trunk **exactly once** per wrapper forward, dispatching the same
-refined `(s, z, mask)` to every child's `_predict`. Joint training is
-opt-in via this wrapper; the per-head registry (`PLDDTHead`, `PaeHead`,
-...) remains the primary path for single-head distillation.
-
-Trunk-once invariant. Every child carries a `trunk` attribute from its
-own construction (the abstract `BaseConfidenceHead.__init__` requires it),
-but inside `MultiHeadConfidence` we **rebind** every `child.trunk` to the
-wrapper's single trunk instance and then dispatch through each child's
-`_predict` directly (bypassing each child's `.forward`, which would
-otherwise re-invoke its own `self.trunk(...)`). This keeps the trunk
-forward count at exactly 1 per wrapper forward, regardless of how many
-children consume the refined `(s, z)`.
+`MultiHeadConfidence` owns an `AdaptorModule` (projects complexa trunk
+intermediates into Boltz-1 dims `(s=384, z=128)` and consumes the Cα
+distogram and 8-dim local latents) and a `QgPairformerStack` (4 Boltz-1
+PairformerLayer's with triangular attention). It holds an `nn.ModuleDict`
+of child heads, runs the backbone exactly once per forward, and
+dispatches the same refined `(s, z, mask)` to every child's `_predict`.
+Joint training is opt-in via this wrapper; the per-head registry
+(`PLDDTHead`, `PaeHead`, ...) remains the primary path for single-head
+distillation through `ConfidenceTrunk`.
 
 Two layers of loss weighting, kept structurally separate (see
 `CLAUDE.md`'s Multi-head paragraph):
@@ -30,6 +24,11 @@ Two layers of loss weighting, kept structurally separate (see
 `expected_trunk_eval_t` parity is asserted at construction. A child that
 needs a different `t` cannot live under this wrapper; spin up a separate
 sidecar instead.
+
+This wrapper is deliberately NOT a subclass of `BaseConfidenceHead`. The
+base class' `__init__` requires a `ConfidenceTrunk`, which the qg-style
+backbone no longer uses. The sidecar Lightning module dispatches via
+`isinstance(self.head, MultiHeadConfidence)`, not by abstract surface.
 """
 
 from __future__ import annotations
@@ -39,36 +38,26 @@ import warnings
 import torch
 from torch import nn
 
-from proteinfoundation.nn.confidence.base import (
-    BaseConfidenceHead,
-    ConfidenceTrunk,
-    StageLiteral,
-)
+from proteinfoundation.nn.confidence.adaptor import AdaptorModule
+from proteinfoundation.nn.confidence.base import BaseConfidenceHead, StageLiteral
+from proteinfoundation.nn.confidence.qg_pairformer_stack import QgPairformerStack
 from proteinfoundation.nn.confidence.registry import register_confidence_head
 
 
 @register_confidence_head("multi_head")
-class MultiHeadConfidence(BaseConfidenceHead):
+class MultiHeadConfidence(nn.Module):
     output_keys: tuple[str, ...] = ()
     output_name_root: str = "multi"
     expected_trunk_eval_t: float = 0.99
 
     def __init__(
         self,
-        trunk: ConfidenceTrunk,
+        adaptor: AdaptorModule,
+        backbone: QgPairformerStack,
         children: dict[str, BaseConfidenceHead],
-        token_dim: int = 768,
-        pair_repr_dim: int = 256,
         loss_weights: dict[str, float] | None = None,
     ) -> None:
-        """Construct the multi-head wrapper.
-
-        A child with `loss_weights[name] == 0.0` is still forward-traversed
-        (its `_predict` runs); only its loss term is skipped. Under DDP with
-        `find_unused_parameters=False`, prefer removing the child from the
-        config over zeroing its weight.
-        """
-        super().__init__(trunk=trunk, token_dim=token_dim, pair_repr_dim=pair_repr_dim)
+        super().__init__()
 
         for name, child in children.items():
             if not child.output_name_root:
@@ -85,9 +74,8 @@ class MultiHeadConfidence(BaseConfidenceHead):
                     f"sidecar for heads needing a different t."
                 )
 
-        for child in children.values():
-            child.trunk = self.trunk
-
+        self.adaptor = adaptor
+        self.backbone = backbone
         self.children_heads = nn.ModuleDict(children)
         self.output_keys = tuple(
             key for child in children.values() for key in child.output_keys
@@ -113,52 +101,32 @@ class MultiHeadConfidence(BaseConfidenceHead):
                 stacklevel=2,
             )
 
-    def _predict(
-        self,
-        s: torch.Tensor,
-        z: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
-        return {
-            name: head._predict(s, z, mask)
-            for name, head in self.children_heads.items()
-        }
-
     def forward(
         self,
-        s: torch.Tensor,
-        z: torch.Tensor,
-        mask: torch.Tensor,
-        cond: torch.Tensor,
+        trunk_seqs: torch.Tensor,
+        trunk_pair: torch.Tensor,
         local_latents: torch.Tensor,
-        chain_id: torch.Tensor | None = None,
+        ca_coords: torch.Tensor,
+        mask: torch.Tensor,
     ) -> dict[str, dict[str, torch.Tensor]]:
-        """Run the trunk once and dispatch refined `(s, z, mask)` to every child.
+        # Boltz-1 pairformer math wants a float mask (multiplied inside softmax
+        # biases / triangle ops); the heads' `_predict` use boolean & for
+        # pair-mask construction. Keep both views separate.
+        mask_f = mask if mask.is_floating_point() else mask.to(trunk_seqs.dtype)
+        mask_bool = mask.bool() if not mask.dtype == torch.bool else mask
 
-        Children's `_predict` must not mutate the shared `s` or `z` in place
-        - the wrapper runs every child against the same `(s, z)` reference
-        from a single trunk forward.
-        """
-        del chain_id
-        s_ref, z_ref = self.trunk(s, z, mask, cond, local_latents)
+        s, z = self.adaptor(
+            trunk_seqs=trunk_seqs,
+            trunk_pair=trunk_pair,
+            local_latents=local_latents,
+            ca_coords=ca_coords,
+            mask=mask_f,
+        )
+        s, z = self.backbone(s, z, mask_f)
         return {
-            name: head._predict(s_ref, z_ref, mask)
+            name: head._predict(s, z, mask_bool)
             for name, head in self.children_heads.items()
         }
-
-    def compute_loss_and_metrics(
-        self,
-        out: dict[str, dict[str, torch.Tensor]],
-        batch: dict[str, torch.Tensor],
-        mask_eff: torch.Tensor,
-        *,
-        stage: StageLiteral = "train",
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        raise NotImplementedError(
-            "MultiHeadConfidence does not own a single scalar loss; the sidecar "
-            "Lightning module invokes `compute_multi_loss_and_metrics` with a "
-            "per-head `masks_by_head` dict instead."
-        )
 
     def compute_multi_loss_and_metrics(
         self,

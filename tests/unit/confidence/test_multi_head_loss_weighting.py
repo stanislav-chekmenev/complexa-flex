@@ -1,11 +1,11 @@
-"""Contract tests for `MultiHeadLoss` weighting (PR-B Slice 3).
+"""Contract tests for `MultiHeadLoss` weighting (qg-style backbone).
 
 Two distinct weighting layers govern the multi-head sidecar loss:
 
-- **Within-head** `loss.ce_weight / loss.ev_weight` — already lives on
+- **Within-head** `loss.ce_weight / loss.ev_weight` -- already lives on
   each head's constructor and is exercised by `test_pae_head` /
   `test_plddt_head`. This file does not retest it.
-- **Across-head** `weight` — the `MultiHeadLoss` multiplier on each head's
+- **Across-head** `weight` -- the `MultiHeadLoss` multiplier on each head's
   total. `weight == 0.0` is a hard short-circuit: the head's
   `compute_loss_and_metrics` is not called and zero gradient reaches its
   parameters.
@@ -21,71 +21,68 @@ import torch
 
 from proteinfoundation.confidence.losses import MultiHeadLoss
 from proteinfoundation.nn.confidence._losses import combined_plddt_loss
+from proteinfoundation.nn.confidence.adaptor import AdaptorModule
 from proteinfoundation.nn.confidence.base import ConfidenceTrunk
 from proteinfoundation.nn.confidence.multi_head import MultiHeadConfidence
 from proteinfoundation.nn.confidence.pae_head import PaeHead
 from proteinfoundation.nn.confidence.plddt_head import PLDDTHead
+from proteinfoundation.nn.confidence.qg_pairformer_stack import QgPairformerStack
 
 
 B, L = 2, 8
-TOKEN_DIM = 64
-PAIR_REPR_DIM = 32
-DIM_COND = 32
+TRUNK_TOKEN_DIM = 768
+TRUNK_PAIR_DIM = 256
 LATENT_DIM = 8
+ADAPTOR_S_DIM = 384
+ADAPTOR_Z_DIM = 128
 NUM_PLDDT_BINS = 50
 NUM_PAE_BINS = 64
 
 
-def _make_trunk() -> ConfidenceTrunk:
+def _placeholder_trunk() -> ConfidenceTrunk:
     return ConfidenceTrunk(
-        token_dim=TOKEN_DIM,
-        pair_repr_dim=PAIR_REPR_DIM,
-        n_blocks=2,
-        n_heads=4,
-        dim_cond=DIM_COND,
-        use_tri_mult=True,
-        use_tri_attn=False,
-        use_qkln=True,
-        dropout=0.0,
-        update_pair_repr_every_n=1,
-        latent_dim=LATENT_DIM,
+        token_dim=TRUNK_TOKEN_DIM,
+        pair_repr_dim=TRUNK_PAIR_DIM,
+        n_blocks=1,
     )
 
 
 def _make_wrapper() -> MultiHeadConfidence:
-    trunk = _make_trunk()
+    trunk = _placeholder_trunk()
     plddt = PLDDTHead(
         trunk=trunk,
-        token_dim=TOKEN_DIM,
-        pair_repr_dim=PAIR_REPR_DIM,
+        token_dim=TRUNK_TOKEN_DIM,
+        pair_repr_dim=TRUNK_PAIR_DIM,
+        d_in_token=ADAPTOR_S_DIM,
         num_plddt_bins=NUM_PLDDT_BINS,
         bin_min=0.0,
         bin_max=100.0,
     )
     pae = PaeHead(
         trunk=trunk,
-        token_dim=TOKEN_DIM,
-        pair_repr_dim=PAIR_REPR_DIM,
+        token_dim=TRUNK_TOKEN_DIM,
+        pair_repr_dim=TRUNK_PAIR_DIM,
+        d_in_pair_token=ADAPTOR_Z_DIM,
         num_pae_bins=NUM_PAE_BINS,
         bin_min=0.0,
         bin_max=32.0,
     )
     return MultiHeadConfidence(
-        trunk=trunk,
+        adaptor=AdaptorModule(),
+        backbone=QgPairformerStack(n_layers=4),
         children={"plddt": plddt, "pae": pae},
-        token_dim=TOKEN_DIM,
-        pair_repr_dim=PAIR_REPR_DIM,
     )
 
 
-def _make_inputs(seed: int = 0):
+def _make_inputs(seed: int = 0) -> dict[str, torch.Tensor]:
     g = torch.Generator().manual_seed(seed)
-    s = torch.randn(B, L, TOKEN_DIM, generator=g)
-    z = torch.randn(B, L, L, PAIR_REPR_DIM, generator=g)
-    mask = torch.ones(B, L, dtype=torch.bool)
-    cond = torch.randn(B, L, DIM_COND, generator=g)
-    local_latents = torch.randn(B, L, LATENT_DIM, generator=g)
-    return s, z, mask, cond, local_latents
+    return {
+        "trunk_seqs": torch.randn(B, L, TRUNK_TOKEN_DIM, generator=g),
+        "trunk_pair": torch.randn(B, L, L, TRUNK_PAIR_DIM, generator=g),
+        "local_latents": torch.randn(B, L, LATENT_DIM, generator=g),
+        "ca_coords": torch.randn(B, L, 3, generator=g),
+        "mask": torch.ones(B, L),
+    }
 
 
 def _make_batch(seed: int = 1) -> dict:
@@ -121,8 +118,7 @@ def _grad_has_signal(p: torch.nn.Parameter) -> bool:
 def test_weight_zero_on_pae_disables_pae_gradients_and_matches_single_head_loss() -> None:
     wrapper = _make_wrapper()
     wrapper.train()
-    s, z, mask, cond, ll = _make_inputs(seed=0)
-    out = wrapper(s, z, mask, cond, ll)
+    out = wrapper(**_make_inputs(seed=0))
     batch = _make_batch(seed=1)
     masks = _masks_all_true()
 
@@ -138,7 +134,7 @@ def test_weight_zero_on_pae_disables_pae_gradients_and_matches_single_head_loss(
         bin_centers=plddt_head.bin_centers,
         ce_weight=plddt_head.ce_weight,
         smooth_l1_weight=plddt_head.ev_weight,
-        label_smoothing=0.0,
+        label_smoothing=plddt_head.label_smoothing,
     )
     assert torch.allclose(total, expected_plddt_total, atol=1e-5), (
         f"weight=0 PAE branch must short-circuit; total={total.item():.6f} "
@@ -164,11 +160,10 @@ def test_weight_zero_on_pae_disables_pae_gradients_and_matches_single_head_loss(
     )
 
 
-def test_both_active_gradients_reach_both_heads_and_trunk() -> None:
+def test_both_active_gradients_reach_both_heads_and_shared_backbone() -> None:
     wrapper = _make_wrapper()
     wrapper.train()
-    s, z, mask, cond, ll = _make_inputs(seed=2)
-    out = wrapper(s, z, mask, cond, ll)
+    out = wrapper(**_make_inputs(seed=2))
     batch = _make_batch(seed=3)
     masks = _masks_all_true()
 
@@ -185,16 +180,18 @@ def test_both_active_gradients_reach_both_heads_and_trunk() -> None:
     assert any(_grad_has_signal(p) for p in pae_head.logits_linear.parameters()), (
         "no PaeHead.logits_linear parameter received gradient"
     )
-    assert any(_grad_has_signal(p) for p in wrapper.trunk.parameters()), (
-        "no trunk parameter received gradient under joint-active weights"
+    assert any(_grad_has_signal(p) for p in wrapper.backbone.parameters()), (
+        "no backbone parameter received gradient under joint-active weights"
+    )
+    assert any(_grad_has_signal(p) for p in wrapper.adaptor.parameters()), (
+        "no adaptor parameter received gradient under joint-active weights"
     )
 
 
-def test_plddt_zero_only_grads_pae_and_trunk() -> None:
+def test_plddt_zero_only_grads_pae_and_shared_backbone() -> None:
     wrapper = _make_wrapper()
     wrapper.train()
-    s, z, mask, cond, ll = _make_inputs(seed=4)
-    out = wrapper(s, z, mask, cond, ll)
+    out = wrapper(**_make_inputs(seed=4))
     batch = _make_batch(seed=5)
     masks = _masks_all_true()
 
@@ -213,15 +210,15 @@ def test_plddt_zero_only_grads_pae_and_trunk() -> None:
     assert any(_grad_has_signal(p) for p in pae_head.logits_linear.parameters()), (
         "no PaeHead.logits_linear parameter received gradient under pae weight=1"
     )
-    assert any(_grad_has_signal(p) for p in wrapper.trunk.parameters()), (
-        "no trunk parameter received gradient when only PAE is active"
+    assert any(_grad_has_signal(p) for p in wrapper.backbone.parameters()), (
+        "no backbone parameter received gradient when only PAE is active"
     )
 
 
 def test_log_dict_structure_and_total_equals_weighted_sum() -> None:
     wrapper = _make_wrapper().eval()
-    s, z, mask, cond, ll = _make_inputs(seed=6)
-    out = wrapper(s, z, mask, cond, ll)
+    with torch.no_grad():
+        out = wrapper(**_make_inputs(seed=6))
     batch = _make_batch(seed=7)
     masks = _masks_all_true()
 

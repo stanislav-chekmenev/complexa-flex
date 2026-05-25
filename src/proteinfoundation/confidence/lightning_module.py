@@ -221,7 +221,8 @@ class ConfidenceDistillationModule(L.LightningModule):
         """
         with torch.no_grad():
             cond = self.proteina.nn.cond_factory(batch)
-        expected_dim = getattr(self.head.trunk, "dim_cond", None)
+        head_trunk = getattr(self.head, "trunk", None)
+        expected_dim = getattr(head_trunk, "dim_cond", None) if head_trunk is not None else None
         if expected_dim is not None and cond.shape[-1] != expected_dim:
             raise ValueError(
                 f"cond_factory output dim {cond.shape[-1]} does not match "
@@ -314,7 +315,18 @@ class ConfidenceDistillationModule(L.LightningModule):
             f"cond axis-1 {cond.shape[1]} must match mask_ext axis-1 {mask_ext.shape[1]} after padding"
         )
 
-        head_out_raw = self.head(s, z, mask_ext, cond, local_latents)
+        if isinstance(self.head, MultiHeadConfidence):
+            ca_coords = inter["ca_coords"]
+            mask_for_head = mask_ext.to(s.dtype) if mask_ext.dtype != s.dtype else mask_ext
+            head_out_raw = self.head(
+                trunk_seqs=s,
+                trunk_pair=z,
+                local_latents=local_latents,
+                ca_coords=ca_coords,
+                mask=mask_for_head,
+            )
+        else:
+            head_out_raw = self.head(s, z, mask_ext, cond, local_latents)
         head_out = self._trim_head_output(head_out_raw, n_orig)
 
         if orig_mask.dtype != torch.bool:
