@@ -113,7 +113,7 @@ def test_expose_intermediates_returns_shape_contract(module):
     assert "trunk_intermediates" in out
     inter = out["trunk_intermediates"]
 
-    assert set(inter.keys()) == {"s", "z", "mask", "orig_mask", "n_orig", "local_latents"}
+    assert set(inter.keys()) == {"s", "z", "mask", "orig_mask", "n_orig", "local_latents", "ca_coords"}
 
     assert inter["s"].shape == (b, n, TOKEN_DIM)
     assert inter["z"].shape == (b, n, n, PAIR_REPR_DIM)
@@ -125,6 +125,8 @@ def test_expose_intermediates_returns_shape_contract(module):
     assert isinstance(inter["n_orig"], int)
     assert inter["local_latents"].shape == (b, n, LATENT_DIM)
     assert inter["local_latents"].dtype == torch.float32
+    assert inter["ca_coords"].shape == (b, n, 3)
+    assert inter["ca_coords"].dtype == torch.float32
 
     assert torch.equal(inter["mask"], inp["mask"])
     assert torch.equal(inter["orig_mask"], inp["mask"])
