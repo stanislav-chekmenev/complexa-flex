@@ -77,6 +77,7 @@ class PaeHead(BaseConfidenceHead):
         ev_weight: float = 0.1,
         label_smoothing: float = 0.0,
         num_bins_ece_adaptive: int = 15,
+        d_in_pair_token: int | None = None,
     ) -> None:
         super().__init__(trunk=trunk, token_dim=token_dim, pair_repr_dim=pair_repr_dim)
         if num_pae_bins <= 0:
@@ -92,8 +93,9 @@ class PaeHead(BaseConfidenceHead):
         self.label_smoothing = float(label_smoothing)
         self.num_bins_ece_adaptive = int(num_bins_ece_adaptive)
 
-        self.logits_norm = nn.LayerNorm(pair_repr_dim)
-        self.logits_linear = nn.Linear(pair_repr_dim, self.num_pae_bins)
+        self.d_in_pair_token = d_in_pair_token if d_in_pair_token is not None else pair_repr_dim
+        self.logits_norm = nn.LayerNorm(self.d_in_pair_token)
+        self.logits_linear = nn.Linear(self.d_in_pair_token, self.num_pae_bins)
 
         bin_width = (self.bin_max - self.bin_min) / self.num_pae_bins
         centers = torch.tensor(
