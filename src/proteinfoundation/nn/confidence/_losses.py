@@ -242,19 +242,20 @@ class MultiHeadLoss:
     per-head scalar weights and returns a flat log dict prefixed by the
     child's dict key.
 
-    Two short-circuits drop a child's contribution to exactly zero with
-    no contaminated gradient and no NaN-from-empty-mean:
+    One short-circuit drops a child's contribution to exactly zero with
+    no contaminated gradient:
 
     - `weights[name] == 0.0` skips the child's loss call entirely. The
       child's `_predict` may still have run inside the wrapper's forward
       (the wrapper does not know in advance which weights are zero), but
       since `total` never depends on the child's logits the autograd
       graph never reaches the child's parameters.
-    - `masks_by_head[name].sum() == 0` (all-False) skips the loss for that
-      child. The masked-reduce helpers already clamp the denominator at
-      1, but skipping here saves the compute and keeps the log dict
-      clean of pseudo-zero metrics from a head whose batch carries no
-      labels for that quantity.
+
+    Empty masks (`masks_by_head[name].sum() == 0`) are handled by the
+    masked-reduce helpers, which clamp the denominator at 1 and return
+    a finite zero. A data-dependent skip here would force a CUDA→CPU
+    sync every step and branch the autograd graph by batch contents,
+    breaking `DDPStrategy(static_graph=True)`.
     """
 
     def __init__(self, weights: dict[str, float]) -> None:
@@ -277,8 +278,6 @@ class MultiHeadLoss:
             if w == 0.0:
                 continue
             mask_eff = masks_by_head[name]
-            if float(mask_eff.sum().item()) == 0.0:
-                continue
             l_head, l_log = head.compute_loss_and_metrics(
                 multi_out[name], batch, mask_eff, stage=stage
             )

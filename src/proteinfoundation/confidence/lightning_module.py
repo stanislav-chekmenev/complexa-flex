@@ -301,21 +301,20 @@ class ConfidenceDistillationModule(L.LightningModule):
             self.proteina.nn.expose_intermediates = True
             nn_out = self.proteina.nn(batch)
 
-        cond = self._compute_cond(batch)
         inter = nn_out["trunk_intermediates"]
         s = inter["s"]
         z = inter["z"]
+        local_latents = inter["local_latents"]
         mask_ext = inter["mask"]
         orig_mask = inter["orig_mask"]
         n_orig = int(inter["n_orig"])
-        local_latents = inter["local_latents"]
-
-        cond = self._pad_cond_to_n_ext(cond, mask_ext)
-        assert cond.shape[1] == mask_ext.shape[1], (
-            f"cond axis-1 {cond.shape[1]} must match mask_ext axis-1 {mask_ext.shape[1]} after padding"
-        )
 
         if isinstance(self.head, MultiHeadConfidence):
+            # The qg-style multi-head wrapper uses its own AdaptorModule +
+            # QgPairformerStack and does NOT consume `cond` (no AdaLN-style time
+            # gating). Skip both `_compute_cond` (a fresh FeatureFactory pass on
+            # the trunk-pinned `t`) and `_pad_cond_to_n_ext` — both pure
+            # overhead on this branch.
             ca_coords = inter["ca_coords"]
             mask_for_head = mask_ext.to(s.dtype) if mask_ext.dtype != s.dtype else mask_ext
             head_out_raw = self.head(
@@ -326,6 +325,11 @@ class ConfidenceDistillationModule(L.LightningModule):
                 mask=mask_for_head,
             )
         else:
+            cond = self._compute_cond(batch)
+            cond = self._pad_cond_to_n_ext(cond, mask_ext)
+            assert cond.shape[1] == mask_ext.shape[1], (
+                f"cond axis-1 {cond.shape[1]} must match mask_ext axis-1 {mask_ext.shape[1]} after padding"
+            )
             head_out_raw = self.head(s, z, mask_ext, cond, local_latents)
         head_out = self._trim_head_output(head_out_raw, n_orig)
 

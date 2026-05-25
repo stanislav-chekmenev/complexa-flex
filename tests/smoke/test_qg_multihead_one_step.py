@@ -69,8 +69,8 @@ def test_qg_multihead_one_step_smoke(tmp_path):
     logged = trainer.callback_metrics
     for key in (
         "val/multi/total",
-        "val/plddt/total",
-        "val/pae/total",
+        "val/multi/plddt/total",
+        "val/multi/pae/total",
     ):
         assert key in logged, f"Missing log key {key!r}; got {sorted(logged.keys())}"
         assert torch.isfinite(logged[key]).all()

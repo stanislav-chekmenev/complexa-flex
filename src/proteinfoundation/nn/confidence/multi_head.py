@@ -74,6 +74,19 @@ class MultiHeadConfidence(nn.Module):
                     f"sidecar for heads needing a different t."
                 )
 
+        # Hydra has to instantiate each child via `BaseConfidenceHead.__init__`,
+        # which requires a `ConfidenceTrunk` constructor arg, so the yaml ships a
+        # placeholder trunk per child (~800 MB each at standard dims). Under this
+        # wrapper the shared `AdaptorModule + QgPairformerStack` replaces the
+        # per-child trunk entirely — the placeholder is dead weight and never
+        # consumed (the wrapper calls `child._predict(s, z, mask)` directly,
+        # bypassing `BaseConfidenceHead.forward`). Drop it from each child's
+        # module tree so the parameters do not enter optimizer/DDP/checkpoint
+        # surface and the GPU memory is reclaimed.
+        for child in children.values():
+            if "trunk" in child._modules:
+                child._modules.pop("trunk")
+
         self.adaptor = adaptor
         self.backbone = backbone
         self.children_heads = nn.ModuleDict(children)

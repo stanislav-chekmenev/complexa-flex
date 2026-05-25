@@ -27,6 +27,26 @@ NUM_NODES="${NUM_NODES:-1}"
 MAX_STEPS="${MAX_STEPS:-}"
 DEVICE_TYPE=h100nvl
 
+# --- SLURM/Hydra coherence guard ---
+# `trainer.num_nodes` and `trainer.devices` are forwarded to Lightning's
+# DDPStrategy and MUST match what SLURM actually allocated (`SLURM_NNODES`
+# and `SLURM_NTASKS_PER_NODE`). A silent mismatch lets Lightning launch
+# fewer ranks than SLURM expects (or vice-versa), producing one of:
+#   - NCCL hang (rendezvous never completes)
+#   - silent half-world (some ranks see batch_size, others see 2x)
+# Both look identical to "job ran for a while then died" in slurm logs.
+# Validate before any expensive staging work.
+if [ -n "${SLURM_NNODES:-}" ] && [ "$SLURM_NNODES" != "$NUM_NODES" ]; then
+    echo "ERROR: SLURM_NNODES=$SLURM_NNODES != NUM_NODES=$NUM_NODES" >&2
+    echo "       Either rerun with #SBATCH --nodes=$NUM_NODES or set NUM_NODES=$SLURM_NNODES" >&2
+    exit 1
+fi
+if [ -n "${SLURM_NTASKS_PER_NODE:-}" ] && [ "$SLURM_NTASKS_PER_NODE" != "$NUM_DEVICES" ]; then
+    echo "ERROR: SLURM_NTASKS_PER_NODE=$SLURM_NTASKS_PER_NODE != NUM_DEVICES=$NUM_DEVICES" >&2
+    echo "       Either rerun with #SBATCH --ntasks-per-node=$NUM_DEVICES or set NUM_DEVICES=$SLURM_NTASKS_PER_NODE" >&2
+    exit 1
+fi
+
 # --- Source project env (uses PROJECT_ROOT) ---
 # env.sh sources .env (gitignored) and re-exports active tool paths.
 # WANDB_ENTITY is read by configs/logging/wandb.yaml via oc.env: resolution;
