@@ -22,7 +22,9 @@ echo "==========================================="
 
 # --- Project layout ---
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
-NUM_DEVICES=2
+NUM_DEVICES="${NUM_DEVICES:-2}"
+NUM_NODES="${NUM_NODES:-1}"
+MAX_STEPS="${MAX_STEPS:-}"
 DEVICE_TYPE=h100nvl
 
 # --- Source project env (uses PROJECT_ROOT) ---
@@ -179,10 +181,14 @@ if [ -n "$RESUME_CKPT_PATH" ]; then
     echo "Resuming from ckpt: $RESUME_CKPT_PATH"
     EXTRA_OVERRIDES+=("resume_ckpt_path=$RESUME_CKPT_PATH")
 fi
+if [ -n "$MAX_STEPS" ]; then
+    EXTRA_OVERRIDES+=("trainer.max_steps=$MAX_STEPS")
+fi
 
 srun --kill-on-bad-exit /usr/bin/env -u WANDB_API_KEY "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
     --config-name=confidence/distillation_teddymer_qg_multihead \
     trainer.devices=$NUM_DEVICES \
+    trainer.num_nodes=$NUM_NODES \
     trainer.precision=bf16-mixed \
     "${EXTRA_OVERRIDES[@]}"
 
