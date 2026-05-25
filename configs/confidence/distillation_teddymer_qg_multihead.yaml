@@ -61,6 +61,7 @@ confidence:
         ce_weight: 1.0
         ev_weight: 0.0
         label_smoothing: 0.0
+        track_metric_correlations: true
     loss_weights:
       plddt: 1.0
       pae: 1.0

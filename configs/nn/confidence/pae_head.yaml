@@ -12,3 +12,4 @@ ce_weight: 0.8
 ev_weight: 0.2
 label_smoothing: 0.0
 num_bins_ece_adaptive: 15
+track_metric_correlations: true
