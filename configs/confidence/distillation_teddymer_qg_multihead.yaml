@@ -1,34 +1,46 @@
 # @package _global_
 #
-# Joint pLDDT + directional-PAE distillation on the Teddymer dimer view.
-#
-# Two layers of loss weighting (kept structurally separate by Hydra
-# convention):
-#   - within-head: `confidence.head.children.{plddt,pae}.{ce_weight,
-#     ev_weight, label_smoothing}` (per CE / SmoothL1-on-EV recipe).
-#   - across-head: `confidence.head.loss_weights.{plddt, pae}` multiplies
-#     each head's total before summing. `loss_weights.<name> = 0.0` is a
-#     hard short-circuit (skips the child's loss call entirely; zero
-#     gradient through that child's path).
+# Joint pLDDT + directional-PAE distillation on the Teddymer dimer view
+# with the quality-graft-style backbone (adaptor + 4 boltz-1 pairformer
+# layers). See docs/superpowers/specs/2026-05-25-qg-head-port-and-pae-
+# metric-correlations-design.md §5 for the full design.
 
 defaults:
-  - /nn/confidence/multi_head@confidence.head
   - /dataset/unified/teddymer_with_plddt_and_pae@data
   - /training/confidence_distill@training
   - /logging/wandb@logging
   - _self_
 
 logging:
-  wandb_tags: ["plddt", "pae", "teddymer", "multi"]
+  wandb_tags: ["plddt", "pae", "teddymer", "multi", "qg"]
 
 confidence:
   head:
+    _target_: proteinfoundation.nn.confidence.multi_head.MultiHeadConfidence
+    adaptor:
+      _target_: proteinfoundation.nn.confidence.adaptor.AdaptorModule
+      trunk_dim: 768
+      pair_dim: 256
+      latent_dim: 8
+      target_s_dim: 384
+      target_z_dim: 128
+      n_attn_layers: 1
+      num_heads: 16
+      ca_pair_dist_min: 0.1
+      ca_pair_dist_max: 3.0
+    backbone:
+      _target_: proteinfoundation.nn.confidence.qg_pairformer_stack.QgPairformerStack
+      n_layers: 4
+      s_dim: 384
+      z_dim: 128
+      num_heads: 16
     children:
       plddt:
         _target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
         trunk:
           _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
         token_dim: 768
+        d_in_token: 384
         pair_repr_dim: 256
         num_plddt_bins: 50
         bin_min: 0.0
@@ -42,6 +54,7 @@ confidence:
           _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
         token_dim: 768
         pair_repr_dim: 256
+        d_in_pair_token: 128
         num_pae_bins: 64
         bin_min: 0.0
         bin_max: 32.0
@@ -73,7 +86,7 @@ trainer:
       monitor: "val/multi/total"
       mode: "min"
       save_top_k: 3
-      filename: "multi-{epoch:03d}-{val/multi/total:.4f}"
+      filename: "qg-multi-{epoch:03d}-{val/multi/total:.4f}"
       auto_insert_metric_name: false
 
 data:
@@ -82,7 +95,7 @@ data:
     cluster_seed: 42
 
 seed: 42
-run_name: "multi-plddt-pae-distill-teddymer"
+run_name: "qg-multi-plddt-pae-distill-teddymer"
 resume_id: null
 resume_ckpt_path: null
 

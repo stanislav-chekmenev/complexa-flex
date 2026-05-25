@@ -1,20 +1,20 @@
 #!/bin/bash
-#SBATCH --job-name=complexa_multidistill
+#SBATCH --job-name=complexa_qgmulti
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=4-00:00:00
-#SBATCH --output=logs/multidistill_%j.out
-#SBATCH --error=logs/multidistill_%j.err
+#SBATCH --output=logs/qgmulti_%j.out
+#SBATCH --error=logs/qgmulti_%j.err
 
 set -euo pipefail
 
 echo "==========================================="
-echo "Multi-head (pLDDT + PAE) confidence-head distillation started: $(date)"
+echo "PAE confidence-head distillation started: $(date)"
 echo "Running on: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "GPU devices: ${CUDA_VISIBLE_DEVICES:-unset}"
@@ -22,9 +22,30 @@ echo "==========================================="
 
 # --- Project layout ---
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
-NUM_DEVICES=2
-NUM_NODES=${SLURM_NNODES:-2}
+NUM_DEVICES="${NUM_DEVICES:-2}"
+NUM_NODES="${NUM_NODES:-1}"
+MAX_STEPS="${MAX_STEPS:-}"
 DEVICE_TYPE=h100nvl
+
+# --- SLURM/Hydra coherence guard ---
+# `trainer.num_nodes` and `trainer.devices` are forwarded to Lightning's
+# DDPStrategy and MUST match what SLURM actually allocated (`SLURM_NNODES`
+# and `SLURM_NTASKS_PER_NODE`). A silent mismatch lets Lightning launch
+# fewer ranks than SLURM expects (or vice-versa), producing one of:
+#   - NCCL hang (rendezvous never completes)
+#   - silent half-world (some ranks see batch_size, others see 2x)
+# Both look identical to "job ran for a while then died" in slurm logs.
+# Validate before any expensive staging work.
+if [ -n "${SLURM_NNODES:-}" ] && [ "$SLURM_NNODES" != "$NUM_NODES" ]; then
+    echo "ERROR: SLURM_NNODES=$SLURM_NNODES != NUM_NODES=$NUM_NODES" >&2
+    echo "       Either rerun with #SBATCH --nodes=$NUM_NODES or set NUM_NODES=$SLURM_NNODES" >&2
+    exit 1
+fi
+if [ -n "${SLURM_NTASKS_PER_NODE:-}" ] && [ "$SLURM_NTASKS_PER_NODE" != "$NUM_DEVICES" ]; then
+    echo "ERROR: SLURM_NTASKS_PER_NODE=$SLURM_NTASKS_PER_NODE != NUM_DEVICES=$NUM_DEVICES" >&2
+    echo "       Either rerun with #SBATCH --ntasks-per-node=$NUM_DEVICES or set NUM_DEVICES=$SLURM_NTASKS_PER_NODE" >&2
+    exit 1
+fi
 
 # --- Source project env (uses PROJECT_ROOT) ---
 # env.sh sources .env (gitignored) and re-exports active tool paths.
@@ -35,7 +56,7 @@ DEVICE_TYPE=h100nvl
 source "$PROJECT_ROOT/env.sh"
 
 if [ "$DEVICE_TYPE" == "rtx6000" ] || [ "$DEVICE_TYPE" == "h100nvl" ]; then
-    DATA_ROOT="/netscratch/$USER/complexa-multidistill"
+    DATA_ROOT="/netscratch/$USER/complexa-paedistill"
 else
     echo "ERROR: unknown DEVICE_TYPE=$DEVICE_TYPE" >&2
     exit 1
@@ -119,8 +140,8 @@ echo "Checkpoint staging complete."
 # /netscratch blob at `/netscratch/schekmenev/teddymer_v1_blob/` (single
 # `data.blob` + locator + dimers + `data.md5` sidecar). The train-start
 # integrity gate (`integrity.enabled=true` in
-# `distillation_teddymer_multihead.yaml`) verifies the live files against
-# the labs-adjacent snapshot at
+# `distillation_teddymer_pae.yaml`) verifies the live files against the
+# labs-adjacent snapshot at
 # `/mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5` before any
 # GPU work. To run against labs directly, override the env vars
 # `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` and set
@@ -143,9 +164,7 @@ echo "  Project root: $PROJECT_ROOT"
 echo "  Data root:    $DATA_ROOT"
 echo "  CKPTs:        $CKPT_DIR_DST"
 echo "  Run dir:      $RUN_DIR"
-echo "  Nodes:        ${NUM_NODES}"
-echo "  GPUs/node:    ${NUM_DEVICES}x $DEVICE_TYPE"
-echo "  World size:   $((NUM_NODES * NUM_DEVICES))"
+echo "  GPUs:         ${NUM_DEVICES}x $DEVICE_TYPE"
 echo ""
 
 # --- WandB auth ---
@@ -157,10 +176,6 @@ echo ""
 unset WANDB_API_KEY
 
 # --- NCCL tuning ---
-# h100 partition has no InfiniBand; inter-node NCCL falls back to TCP/Ethernet.
-# NCCL_IB_DISABLE=1 is mandatory here (probing IB on a non-IB fabric stalls).
-# NCCL_SOCKET_IFNAME can be pinned (e.g. =eth0) if NCCL guesses the wrong
-# interface — surface NCCL_DEBUG=INFO first and pin only if needed.
 export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
@@ -171,10 +186,7 @@ export NCCL_ASYNC_ERROR_HANDLING=1
 # Pair-update layers (src/proteinfoundation/nn/modules/pair_update.py:82,88,105,107,110)
 # use reentrant torch.utils.checkpoint; the deep backward recompute fragments the
 # caching allocator across the 250-550 residue dimer-crop distribution. OOM at
-# step 927/63168 (job 53667, single-head PAE run) with 5.15 GiB
-# reserved-but-unallocated was textbook. Multi-head adds a second per-pair
-# logits tensor (PAE 64-bin) on top of pLDDT's per-residue 50-bin tensor, so
-# the fragmentation pressure is at least as high as the single-head PAE run.
+# step 927/63168 (job 53667) with 5.15 GiB reserved-but-unallocated was textbook.
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 cd "$PROJECT_ROOT"
@@ -182,16 +194,19 @@ cd "$PROJECT_ROOT"
 # --- Run training ---
 # torch.compile is OFF by default (Teddymer dimers are heterogeneously
 # cropped; dynamic-L recompile storm risk — see plan §11 abort criterion).
-echo "Starting multi-head (pLDDT + PAE) confidence-head distillation..."
+echo "Starting PAE confidence-head distillation..."
 RESUME_CKPT_PATH="${RESUME_CKPT_PATH:-}"
 EXTRA_OVERRIDES=()
 if [ -n "$RESUME_CKPT_PATH" ]; then
     echo "Resuming from ckpt: $RESUME_CKPT_PATH"
     EXTRA_OVERRIDES+=("resume_ckpt_path=$RESUME_CKPT_PATH")
 fi
+if [ -n "$MAX_STEPS" ]; then
+    EXTRA_OVERRIDES+=("trainer.max_steps=$MAX_STEPS")
+fi
 
 srun --kill-on-bad-exit /usr/bin/env -u WANDB_API_KEY "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
-    --config-name=confidence/distillation_teddymer_multihead \
+    --config-name=confidence/distillation_teddymer_qg_multihead \
     trainer.devices=$NUM_DEVICES \
     trainer.num_nodes=$NUM_NODES \
     trainer.precision=bf16-mixed \
