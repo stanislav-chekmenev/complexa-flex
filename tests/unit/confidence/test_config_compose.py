@@ -67,7 +67,7 @@ _EXPECTED_TAGS = {
     "confidence/distillation_swissprot": ["plddt", "swissprot"],
     "confidence/distillation_swissprot_control": ["plddt", "swissprot", "control"],
     "confidence/distillation_teddymer_pae": ["pae", "teddymer"],
-    "confidence/distillation_teddymer_qg_multihead": ["plddt", "pae", "teddymer", "multi", "qg"],
+    "confidence/distillation_teddymer_multihead": ["plddt", "pae", "teddymer", "multi"],
 }
 
 
