@@ -434,11 +434,11 @@ def test_multi_head_ddp_zero_weight_with_find_unused_parameters_true() -> None:
     before invoking compute_loss_and_metrics). The warning emitted at
     construction documents two escape hatches: removing the child from the
     config, or relaxing DDP (find_unused_parameters_true / static_graph=True).
-    This subtest exercises static_graph=True because the trunk module is
-    currently rebound across the wrapper and its children (child.trunk =
-    self.trunk), which would trip the "parameter marked ready twice" assertion
-    under find_unused_parameters=True; static_graph=True is the working
-    workaround until that rebinding is replaced (post-merge cleanup).
+    This subtest exercises static_graph=True because the wrapper rebinds the
+    trunk across the wrapper and its children (child.trunk = self.trunk) — the
+    documented pre-QG contract — which would trip the "parameter marked ready
+    twice" assertion under find_unused_parameters=True alone; static_graph=True
+    is the documented escape (see CLAUDE.md "Multi-GPU DDP" section).
     """
     world_size = 2
     port = _free_port()

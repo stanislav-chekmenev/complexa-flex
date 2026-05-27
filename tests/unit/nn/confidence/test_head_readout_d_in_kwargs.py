@@ -1,8 +1,8 @@
 """Contract tests for `d_in_token` / `d_in_pair_token` readout kwargs.
 
-PR-1 quality-graft port: the adaptor module collapses the trunk's 776-dim `s`
-and 256-dim `z` to 384/128 respectively, so the heads must accept a readout
-width that may differ from the trunk's emitted `token_dim` / `pair_repr_dim`.
+A confidence head's readout width may differ from the trunk's emitted
+`token_dim` / `pair_repr_dim` when a future upstream module reshapes
+`s` / `z` before the head consumes them.
 
 These tests pin:
 

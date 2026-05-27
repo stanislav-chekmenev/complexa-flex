@@ -1,10 +1,14 @@
 # @package _global_
 #
 # Joint pLDDT + directional-PAE distillation on the Teddymer dimer view
-# with the pre-QG ConfidenceTrunk backbone — each child head owns its own
-# trunk cfg (the MultiHeadConfidence wrapper rebinds every `child.trunk`
-# to its single shared `ConfidenceTrunk` at construction so the trunk
-# runs exactly once per forward).
+# with the pre-QG ConfidenceTrunk backbone. The `MultiHeadConfidence`
+# wrapper owns a single shared `ConfidenceTrunk` at `self.trunk` (the
+# `confidence.head.trunk` block below) and rebinds every `child.trunk`
+# to that instance at construction, so the trunk runs exactly once per
+# forward. Each child's `trunk:` entry is a bare `_target_` stub kept
+# only to satisfy the child constructor's `trunk` kwarg — the wrapper
+# discards the per-child trunk immediately after rebind, so it has no
+# effect on training and its shape fields would be dead config.
 #
 # Two layers of loss weighting (kept structurally separate by Hydra
 # convention):
@@ -27,21 +31,23 @@ logging:
 
 confidence:
   head:
+    trunk:
+      _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
+      token_dim: 768
+      pair_repr_dim: 256
+      n_blocks: 4
+      n_heads: 16
+      dim_cond: 256
+      use_tri_mult: true
+      use_tri_attn: false
+      use_qkln: true
+      dropout: 0.1
+      update_pair_repr_every_n: 1
     children:
       plddt:
         _target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
         trunk:
           _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
-          token_dim: 768
-          pair_repr_dim: 256
-          n_blocks: 4
-          n_heads: 16
-          dim_cond: 256
-          use_tri_mult: true
-          use_tri_attn: false
-          use_qkln: true
-          dropout: 0.1
-          update_pair_repr_every_n: 1
         token_dim: 768
         pair_repr_dim: 256
         num_plddt_bins: 50
@@ -54,16 +60,6 @@ confidence:
         _target_: proteinfoundation.nn.confidence.pae_head.PaeHead
         trunk:
           _target_: proteinfoundation.nn.confidence.base.ConfidenceTrunk
-          token_dim: 768
-          pair_repr_dim: 256
-          n_blocks: 4
-          n_heads: 16
-          dim_cond: 256
-          use_tri_mult: true
-          use_tri_attn: false
-          use_qkln: true
-          dropout: 0.1
-          update_pair_repr_every_n: 1
         token_dim: 768
         pair_repr_dim: 256
         num_pae_bins: 64
