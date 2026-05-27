@@ -209,11 +209,13 @@ def test_cond_padded_to_n_ext_with_zero_tail() -> None:
     captured: dict[str, torch.Tensor] = {}
     real_forward = mod.head.forward
 
-    def spy(s, z, mask, cond, local_latents, chain_id=None):
+    def spy(s, z, mask, cond, local_latents, chain_id=None, ca_coords=None):
         captured["cond"] = cond.detach().clone()
         captured["mask"] = mask.detach().clone()
         captured["local_latents"] = local_latents.detach().clone()
-        return real_forward(s, z, mask, cond, local_latents, chain_id=chain_id)
+        return real_forward(
+            s, z, mask, cond, local_latents, chain_id=chain_id, ca_coords=ca_coords
+        )
 
     mod.head.forward = spy
 

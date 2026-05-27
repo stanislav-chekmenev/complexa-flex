@@ -41,8 +41,15 @@ confidence:
       use_tri_mult: true
       use_tri_attn: false
       use_qkln: true
-      dropout: 0.1
+      dropout: 0.2
       update_pair_repr_every_n: 1
+      # Cα binned-distogram residual on z. With pair_repr_dim=256 the
+      # distogram is one-hot over 256 bins directly added to z (no
+      # projection), then re-mask-zeroed before the attention stack.
+      # Range is in nm and mirrors the deleted quality-graft adaptor.
+      add_ca_distogram: true
+      ca_pair_dist_min: 0.1
+      ca_pair_dist_max: 3.0
     children:
       plddt:
         _target_: proteinfoundation.nn.confidence.plddt_head.PLDDTHead
@@ -70,8 +77,8 @@ confidence:
         label_smoothing: 0.0
         track_metric_correlations: true
     loss_weights:
-      plddt: 0.7
-      pae: 0.7
+      plddt: 1
+      pae: 1
 
 trainer:
   _target_: lightning.pytorch.Trainer
@@ -85,7 +92,7 @@ trainer:
   precision: ${training.precision}
   max_epochs: ${training.max_epochs}
   gradient_clip_val: ${training.gradient_clip_val}
-  log_every_n_steps: 15
+  log_every_n_steps: 25
   check_val_every_n_epoch: 1
   val_check_interval: 1000
   callbacks:

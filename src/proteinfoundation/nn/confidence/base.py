@@ -18,6 +18,7 @@ from typing import Literal
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from proteinfoundation.nn.modules.attn_n_transition import MultiheadAttnAndTransition
 from proteinfoundation.nn.modules.pair_update import PairReprUpdate
@@ -55,8 +56,17 @@ class ConfidenceTrunk(nn.Module):
         dropout: float = 0.1,
         update_pair_repr_every_n: int = 1,
         latent_dim: int = 8,
+        add_ca_distogram: bool = False,
+        ca_pair_dist_min: float = 0.1,
+        ca_pair_dist_max: float = 3.0,
     ) -> None:
         super().__init__()
+        if add_ca_distogram and pair_repr_dim < 2:
+            raise ValueError(
+                f"add_ca_distogram=True requires pair_repr_dim >= 2 (got "
+                f"{pair_repr_dim}); the distogram is one-hot over pair_repr_dim "
+                f"bins and needs at least one interior edge."
+            )
         self.token_dim = token_dim
         self.pair_repr_dim = pair_repr_dim
         self.n_blocks = n_blocks
@@ -64,6 +74,9 @@ class ConfidenceTrunk(nn.Module):
         self.dim_cond = dim_cond
         self.update_pair_repr_every_n = update_pair_repr_every_n
         self.latent_dim = latent_dim
+        self.add_ca_distogram = add_ca_distogram
+        self.ca_pair_dist_min = ca_pair_dist_min
+        self.ca_pair_dist_max = ca_pair_dist_max
 
         self.transformer_layers = nn.ModuleList(
             [
@@ -108,6 +121,36 @@ class ConfidenceTrunk(nn.Module):
             nn.LayerNorm(token_dim),
         )
 
+    def _binned_ca_distogram(self, ca_coords: torch.Tensor) -> torch.Tensor:
+        """Symmetric one-hot Cα distogram over `pair_repr_dim` bins.
+
+        Mirrors the deleted quality-graft adaptor verbatim: split the
+        interval `[ca_pair_dist_min, ca_pair_dist_max]` into `n_bins - 1`
+        equal interior edges; distances below the first edge land in
+        bin 0, distances above the last edge land in bin `n_bins - 1`.
+
+        Args:
+            ca_coords: `[b, n, 3]` Cα coordinates in nm.
+
+        Returns:
+            `[b, n, n, pair_repr_dim]` one-hot tensor, cast to
+            `ca_coords.dtype`.
+        """
+        pair_dists = torch.norm(
+            ca_coords[:, :, None, :] - ca_coords[:, None, :, :],
+            dim=-1,
+        )
+        n_bins = self.pair_repr_dim
+        bin_limits = torch.linspace(
+            self.ca_pair_dist_min,
+            self.ca_pair_dist_max,
+            n_bins - 1,
+            device=ca_coords.device,
+            dtype=ca_coords.dtype,
+        )
+        bin_indices = torch.bucketize(pair_dists, bin_limits)
+        return F.one_hot(bin_indices, num_classes=n_bins).to(dtype=ca_coords.dtype)
+
     def forward(
         self,
         s: torch.Tensor,
@@ -115,6 +158,7 @@ class ConfidenceTrunk(nn.Module):
         mask: torch.Tensor,
         cond: torch.Tensor,
         local_latents: torch.Tensor,
+        ca_coords: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the trunk.
 
@@ -128,6 +172,11 @@ class ConfidenceTrunk(nn.Module):
                 same `n_extended` axis. Projected to `token_dim` and added
                 as a mask-zeroed residual to `s` before the pair-biased
                 attention stack.
+            ca_coords: `[b, n, 3]` Cα coordinates in nm. Required when
+                `add_ca_distogram=True`; a one-hot binned distogram is
+                added directly to `z` (no projection, `n_bins ==
+                pair_repr_dim`) and re-mask-zeroed before the attention
+                stack. Ignored otherwise.
 
         Returns:
             `(s_refined, z_refined)`. Both mask-zeroed and LayerNormed;
@@ -145,6 +194,15 @@ class ConfidenceTrunk(nn.Module):
         # from leaking the LN bias into valid cells through downstream attention.
         ll = self.local_latents_proj(local_latents) * mask_f
         s = s + ll
+
+        if self.add_ca_distogram:
+            if ca_coords is None:
+                raise ValueError(
+                    "ConfidenceTrunk: add_ca_distogram=True but ca_coords is None; "
+                    "the caller must supply [b, n, 3] Cα coords in nm."
+                )
+            z = z + self._binned_ca_distogram(ca_coords)
+            z = z * pair_mask
 
         for i in range(self.n_blocks):
             s = self.transformer_layers[i](s, z, cond, mask)
@@ -205,6 +263,7 @@ class BaseConfidenceHead(nn.Module, ABC):
         cond: torch.Tensor,
         local_latents: torch.Tensor,
         chain_id: torch.Tensor | None = None,
+        ca_coords: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run trunk then `_predict`.
 
@@ -217,12 +276,15 @@ class BaseConfidenceHead(nn.Module, ABC):
         for future ipTM / ipAE / ipLDDT subclasses that need per-residue
         chain identity. `PLDDTHead` does not consume it.
 
+        `ca_coords` is forwarded to the trunk when its
+        `add_ca_distogram=True`; otherwise ignored.
+
         The head does **not** trim concat-features; the caller decides
         whether to slice `[:, :n_orig]` using `orig_mask`.
         """
         del chain_id
 
-        s_ref, z_ref = self.trunk(s, z, mask, cond, local_latents)
+        s_ref, z_ref = self.trunk(s, z, mask, cond, local_latents, ca_coords=ca_coords)
         return self._predict(s_ref, z_ref, mask)
 
     def compute_loss_and_metrics(

@@ -328,13 +328,16 @@ class ConfidenceDistillationModule(L.LightningModule):
         mask_ext = inter["mask"]
         orig_mask = inter["orig_mask"]
         n_orig = int(inter["n_orig"])
+        ca_coords = inter.get("ca_coords")
 
         cond = self._compute_cond(batch)
         cond = self._pad_cond_to_n_ext(cond, mask_ext)
         assert cond.shape[1] == mask_ext.shape[1], (
             f"cond axis-1 {cond.shape[1]} must match mask_ext axis-1 {mask_ext.shape[1]} after padding"
         )
-        head_out_raw = self.head(s, z, mask_ext, cond, local_latents)
+        head_out_raw = self.head(
+            s, z, mask_ext, cond, local_latents, ca_coords=ca_coords
+        )
         head_out = self._trim_head_output(head_out_raw, n_orig)
 
         if orig_mask.dtype != torch.bool:
