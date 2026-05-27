@@ -1,9 +1,10 @@
 """Trunk-hook contract: `ca_coords` exposed in `trunk_intermediates`.
 
-The quality-graft adaptor consumes a Cα-Cα distogram, so the trunk
-must expose its predicted Cα coordinates alongside `s`, `z`,
-`local_latents`. This test pins the contract that `expose_intermediates`
-either exposes ALL of them or none — there is no partial state.
+`ca_coords` is exposed alongside `s`, `z`, `local_latents` as a utility
+for any future ca_coords-consuming confidence head (e.g. one that needs
+a Cα-Cα distogram). This test pins the contract that
+`expose_intermediates` either exposes ALL of them or none — there is no
+partial state.
 """
 
 from __future__ import annotations

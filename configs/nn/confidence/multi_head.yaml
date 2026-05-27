@@ -1,0 +1,15 @@
+defaults:
+  - base
+  - _self_
+
+_target_: proteinfoundation.nn.confidence.multi_head.MultiHeadConfidence
+token_dim: 768
+pair_repr_dim: 256
+# `children` and `loss_weights` MUST be overridden by the parent training
+# config — see `configs/confidence/distillation_teddymer_multihead.yaml`.
+# `children` is a dict[name -> child head cfg]; each child must carry its
+# own `_target_` and `trunk` (the wrapper rebinds `child.trunk` to its
+# single owned trunk at construction, so each child's trunk cfg is
+# effectively a placeholder).
+children: ???
+loss_weights: ???

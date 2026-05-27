@@ -1,20 +1,21 @@
 #!/bin/bash
-#SBATCH --job-name=complexa_qgmulti
+#SBATCH --job-name=complexa_multi
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
+#SBATCH --exclude=H100Azure04,H100Azure05
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=4-00:00:00
-#SBATCH --output=logs/qgmulti_%j.out
-#SBATCH --error=logs/qgmulti_%j.err
+#SBATCH --output=logs/multi_%j.out
+#SBATCH --error=logs/multi_%j.err
 
 set -euo pipefail
 
 echo "==========================================="
-echo "PAE confidence-head distillation started: $(date)"
+echo "pLDDT + PAE confidence-head distillation started: $(date)"
 echo "Running on: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
 echo "GPU devices: ${CUDA_VISIBLE_DEVICES:-unset}"
@@ -140,8 +141,8 @@ echo "Checkpoint staging complete."
 # /netscratch blob at `/netscratch/schekmenev/teddymer_v1_blob/` (single
 # `data.blob` + locator + dimers + `data.md5` sidecar). The train-start
 # integrity gate (`integrity.enabled=true` in
-# `distillation_teddymer_pae.yaml`) verifies the live files against the
-# labs-adjacent snapshot at
+# `distillation_teddymer_multihead.yaml`) verifies the live files against
+# the labs-adjacent snapshot at
 # `/mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5` before any
 # GPU work. To run against labs directly, override the env vars
 # `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` and set
@@ -194,7 +195,7 @@ cd "$PROJECT_ROOT"
 # --- Run training ---
 # torch.compile is OFF by default (Teddymer dimers are heterogeneously
 # cropped; dynamic-L recompile storm risk — see plan §11 abort criterion).
-echo "Starting PAE confidence-head distillation..."
+echo "Starting pLDDT + PAE confidence-head distillation..."
 RESUME_CKPT_PATH="${RESUME_CKPT_PATH:-}"
 EXTRA_OVERRIDES=()
 if [ -n "$RESUME_CKPT_PATH" ]; then
@@ -206,7 +207,7 @@ if [ -n "$MAX_STEPS" ]; then
 fi
 
 srun --kill-on-bad-exit /usr/bin/env -u WANDB_API_KEY "$ENV_LOCAL/bin/python" -m proteinfoundation.confidence.train_confidence \
-    --config-name=confidence/distillation_teddymer_qg_multihead \
+    --config-name=confidence/distillation_teddymer_multihead \
     trainer.devices=$NUM_DEVICES \
     trainer.num_nodes=$NUM_NODES \
     trainer.precision=bf16-mixed \

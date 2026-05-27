@@ -1,4 +1,4 @@
-"""End-to-end smoke for `MultiHeadConfidence` distillation (qg-style backbone).
+"""End-to-end smoke for `MultiHeadConfidence` distillation (PR-B Slice 3).
 
 Two checks on a fake datamodule that emits a Teddymer-shaped batch with
 both `plddt_*` and `pae_*` labels populated:
@@ -34,21 +34,17 @@ from torch.utils.data import DataLoader, Dataset
 
 from proteinfoundation.confidence.lightning_module import ConfidenceDistillationModule
 from proteinfoundation.confidence.losses import MultiHeadLoss
-from proteinfoundation.nn.confidence.adaptor import AdaptorModule
 from proteinfoundation.nn.confidence.base import ConfidenceTrunk
 from proteinfoundation.nn.confidence.multi_head import MultiHeadConfidence
 from proteinfoundation.nn.confidence.pae_head import PaeHead
 from proteinfoundation.nn.confidence.plddt_head import PLDDTHead
-from proteinfoundation.nn.confidence.qg_pairformer_stack import QgPairformerStack
 
 
 pytestmark = pytest.mark.slow
 
 
-TRUNK_TOKEN_DIM = 768
-TRUNK_PAIR_DIM = 256
-ADAPTOR_S_DIM = 384
-ADAPTOR_Z_DIM = 128
+TOKEN_DIM = 32
+PAIR_REPR_DIM = 16
 DIM_COND = 16
 LATENT_DIM = 8
 NUM_PLDDT_BINS = 50
@@ -73,12 +69,7 @@ class _FakeCondFactory(nn.Module):
 
 
 class _FakeProteinaNN(nn.Module):
-    def __init__(
-        self,
-        dim_cond: int,
-        token_dim: int,
-        pair_repr_dim: int,
-    ) -> None:
+    def __init__(self, dim_cond: int, token_dim: int, pair_repr_dim: int) -> None:
         super().__init__()
         self.cond_factory = _FakeCondFactory(("bb_ca", "local_latents"), dim_cond)
         self.expose_intermediates = True
@@ -97,14 +88,6 @@ class _FakeProteinaNN(nn.Module):
         local_latents = batch["x_t"]["local_latents"] * mask[..., None].to(
             batch["x_t"]["local_latents"].dtype
         )
-        # qg-MultiHeadConfidence consumes Cα coordinates to build the
-        # pairwise distogram added to z in the adaptor. The frozen
-        # complexa trunk would emit these; here we forward whatever
-        # bb_ca channel the fake fm produced (already in the binder
-        # frame, post-recentering trivially zero in this stub).
-        ca_coords = batch["x_t"]["bb_ca"] * mask[..., None].to(
-            batch["x_t"]["bb_ca"].dtype
-        )
         return {
             "trunk_intermediates": {
                 "s": s,
@@ -113,7 +96,6 @@ class _FakeProteinaNN(nn.Module):
                 "orig_mask": mask,
                 "n_orig": int(n),
                 "local_latents": local_latents,
-                "ca_coords": ca_coords,
             }
         }
 
@@ -165,7 +147,7 @@ class _FakeAutoEncoder:
 class _FakeProteina(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.nn = _FakeProteinaNN(DIM_COND, TRUNK_TOKEN_DIM, TRUNK_PAIR_DIM)
+        self.nn = _FakeProteinaNN(DIM_COND, TOKEN_DIM, PAIR_REPR_DIM)
         self.fm = _FakeFM()
         self.autoencoder = _FakeAutoEncoder()
         self.cfg_exp = SimpleNamespace(
@@ -229,38 +211,41 @@ class _FakeDM(pl.LightningDataModule):
         return DataLoader(self._ds, batch_size=B, collate_fn=_collate)
 
 
-def _placeholder_trunk() -> ConfidenceTrunk:
-    return ConfidenceTrunk(
-        token_dim=TRUNK_TOKEN_DIM,
-        pair_repr_dim=TRUNK_PAIR_DIM,
-        n_blocks=1,
-    )
-
-
 def _make_wrapper() -> MultiHeadConfidence:
-    trunk = _placeholder_trunk()
+    trunk = ConfidenceTrunk(
+        token_dim=TOKEN_DIM,
+        pair_repr_dim=PAIR_REPR_DIM,
+        n_blocks=2,
+        n_heads=4,
+        dim_cond=DIM_COND,
+        use_tri_mult=True,
+        use_tri_attn=False,
+        use_qkln=True,
+        dropout=0.0,
+        update_pair_repr_every_n=1,
+        latent_dim=LATENT_DIM,
+    )
     plddt = PLDDTHead(
         trunk=trunk,
-        token_dim=TRUNK_TOKEN_DIM,
-        pair_repr_dim=TRUNK_PAIR_DIM,
-        d_in_token=ADAPTOR_S_DIM,
+        token_dim=TOKEN_DIM,
+        pair_repr_dim=PAIR_REPR_DIM,
         num_plddt_bins=NUM_PLDDT_BINS,
         bin_min=0.0,
         bin_max=100.0,
     )
     pae = PaeHead(
         trunk=trunk,
-        token_dim=TRUNK_TOKEN_DIM,
-        pair_repr_dim=TRUNK_PAIR_DIM,
-        d_in_pair_token=ADAPTOR_Z_DIM,
+        token_dim=TOKEN_DIM,
+        pair_repr_dim=PAIR_REPR_DIM,
         num_pae_bins=NUM_PAE_BINS,
         bin_min=0.0,
         bin_max=32.0,
     )
     return MultiHeadConfidence(
-        adaptor=AdaptorModule(),
-        backbone=QgPairformerStack(n_layers=4),
+        trunk=trunk,
         children={"plddt": plddt, "pae": pae},
+        token_dim=TOKEN_DIM,
+        pair_repr_dim=PAIR_REPR_DIM,
     )
 
 
@@ -370,15 +355,11 @@ def _ddp_worker(
                 mask=batch["mask"],
             )
             nn_out = module.proteina.nn(batch)
+            cond = module.proteina.nn.cond_factory(batch)
 
         inter = nn_out["trunk_intermediates"]
-        mask_f = inter["mask"].to(inter["s"].dtype)
         head_out = ddp_head(
-            trunk_seqs=inter["s"],
-            trunk_pair=inter["z"],
-            local_latents=inter["local_latents"],
-            ca_coords=inter["ca_coords"],
-            mask=mask_f,
+            inter["s"], inter["z"], inter["mask"], cond, inter["local_latents"]
         )
         masks_by_head = {
             "plddt": batch["plddt_mask"].to(torch.float32),
@@ -445,7 +426,7 @@ def test_multi_head_ddp_gloo_two_rank_one_step() -> None:
 @pytest.mark.skipif(
     not dist.is_available(), reason="torch.distributed not available"
 )
-def test_multi_head_ddp_zero_weight_with_static_graph_true() -> None:
+def test_multi_head_ddp_zero_weight_with_find_unused_parameters_true() -> None:
     """Documented escape hatch: zero-weighted child + DDP static_graph=True.
 
     When loss_weights[pae] == 0.0, the PaeHead's parameters enter the autograd
@@ -453,10 +434,11 @@ def test_multi_head_ddp_zero_weight_with_static_graph_true() -> None:
     before invoking compute_loss_and_metrics). The warning emitted at
     construction documents two escape hatches: removing the child from the
     config, or relaxing DDP (find_unused_parameters_true / static_graph=True).
-    This subtest exercises static_graph=True because it is the
-    repo-standard mitigation for the same reentrant-checkpoint reducer
-    interaction documented in CLAUDE.md (the qg backbone uses
-    triangular attention with checkpointing).
+    This subtest exercises static_graph=True because the wrapper rebinds the
+    trunk across the wrapper and its children (child.trunk = self.trunk) — the
+    documented pre-QG contract — which would trip the "parameter marked ready
+    twice" assertion under find_unused_parameters=True alone; static_graph=True
+    is the documented escape (see CLAUDE.md "Multi-GPU DDP" section).
     """
     world_size = 2
     port = _free_port()
