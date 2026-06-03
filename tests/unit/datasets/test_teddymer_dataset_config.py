@@ -191,6 +191,30 @@ def test_yaml_filter_pins_geometry_only_threshold():
     )
 
 
+def test_yaml_pins_seqid_cluster_column():
+    """Pin the cluster-split contract: the val split must hold out whole
+    30%-sequence-identity clusters, not a positional row-order slice.
+
+    A positional slice over the parent-grouped ``dimers.parquet`` is clean by
+    ``parent_afdb_id`` but leaks at the fold/sequence-family level (~99.9% of
+    val dimers share a CATH fold with train), inflating validation Pearson on
+    an untrained head. ``cluster_column: seqclust30`` routes the split through
+    the cluster-aware branch of ``_split_metadata``; the column is produced
+    offline by ``scripts/cluster_teddymer_parents.py`` (MMseqs2 easy-cluster
+    --min-seq-id 0.3). This mirrors AF-multimer / Boltz / Chai practice.
+    """
+    with initialize_config_dir(
+        config_dir=str(CONFIG_DIR / "dataset" / "unified"), version_base="1.3"
+    ):
+        cfg = compose(config_name="teddymer_with_plddt_and_pae")
+
+    assert cfg.datamodule.cluster_column == "seqclust30", (
+        "Teddymer split must be cluster-aware on the 30%-identity column "
+        f"`seqclust30`, got cluster_column={cfg.datamodule.cluster_column!r}. "
+        "A positional split leaks fold/sequence-family homology into val."
+    )
+
+
 def test_one_train_batch_has_expected_fields_and_dtypes(tmp_path):
     dimers_path, locator_path = _build_view(tmp_path)
     cfg = _compose_cfg(dimers_path, locator_path, tmp_path)

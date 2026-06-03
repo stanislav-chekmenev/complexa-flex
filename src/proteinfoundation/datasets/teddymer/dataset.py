@@ -52,31 +52,55 @@ def _split_metadata(
     cluster_column: str | None,
     cluster_seed: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if cluster_column is not None and cluster_column in metadata.columns:
-        rng = np.random.default_rng(cluster_seed)
-        cluster_ids = metadata[cluster_column].to_numpy()
-        unique = np.unique(cluster_ids)
-        shuffled = unique.copy()
-        rng.shuffle(shuffled)
-        target_train = int(len(metadata) * train_split)
-        cluster_to_rows = {c: np.where(cluster_ids == c)[0] for c in shuffled}
-        train_rows: list[int] = []
-        train_clusters: set = set()
-        for c in shuffled:
-            if len(train_rows) >= target_train:
-                break
-            train_rows.extend(int(i) for i in cluster_to_rows[c])
-            train_clusters.add(c)
-        val_rows = [
-            int(i)
-            for c in shuffled
-            if c not in train_clusters
-            for i in cluster_to_rows[c]
-        ]
-        return (
-            metadata.iloc[train_rows].reset_index(drop=True),
-            metadata.iloc[val_rows].reset_index(drop=True),
-        )
+    """Split into train / val, holding out whole clusters when requested.
+
+    With ``cluster_column`` set and present, shuffle the unique cluster ids
+    under ``cluster_seed`` and greedily fill train up to ``train_split`` of the
+    rows, assigning the remaining clusters to val — so no cluster spans both
+    splits. Falls back to a positional row-order slice when ``cluster_column``
+    is ``None`` or absent. Guard parity with
+    ``StructureDataModule._cluster_aware_split``: warn (do not raise) on a
+    missing column and on an empty val split.
+    """
+    if cluster_column is not None:
+        if cluster_column not in metadata.columns:
+            logger.warning(
+                f"cluster_column={cluster_column!r} requested but absent from "
+                f"metadata columns {list(metadata.columns)}; falling back to "
+                "row-order split."
+            )
+        else:
+            rng = np.random.default_rng(cluster_seed)
+            cluster_ids = metadata[cluster_column].to_numpy()
+            unique = np.unique(cluster_ids)
+            shuffled = unique.copy()
+            rng.shuffle(shuffled)
+            target_train = int(len(metadata) * train_split)
+            cluster_to_rows = {c: np.where(cluster_ids == c)[0] for c in shuffled}
+            train_rows: list[int] = []
+            train_clusters: set = set()
+            for c in shuffled:
+                if len(train_rows) >= target_train:
+                    break
+                train_rows.extend(int(i) for i in cluster_to_rows[c])
+                train_clusters.add(c)
+            val_rows = [
+                int(i)
+                for c in shuffled
+                if c not in train_clusters
+                for i in cluster_to_rows[c]
+            ]
+            if len(val_rows) == 0:
+                logger.warning(
+                    "_split_metadata: empty val split with "
+                    f"cluster_column={cluster_column!r}, train_split={train_split}, "
+                    f"n_clusters={len(unique)}, n_rows={len(metadata)}; all clusters "
+                    "fell on the train side."
+                )
+            return (
+                metadata.iloc[train_rows].reset_index(drop=True),
+                metadata.iloc[val_rows].reset_index(drop=True),
+            )
     n_train = int(len(metadata) * train_split)
     return (
         metadata.iloc[:n_train].reset_index(drop=True),
@@ -324,6 +348,46 @@ class TeddymerDimerDataModule(L.LightningDataModule):
                 out.append(t)
         return out
 
+    def _log_split_provenance(
+        self, train_meta: pd.DataFrame, val_meta: pd.DataFrame
+    ) -> None:
+        """Emit a rank-0 line stating whether the cluster-aware split was used.
+
+        `_split_metadata` warns + silently falls back to a positional slice
+        when `cluster_column` is requested but absent — and a positional split
+        passes every test and trains without error, so a forgotten blob rebuild
+        would silently reinstate the homology leak this split exists to remove.
+        This makes the outcome a positive, rank-0 line in the run header rather
+        than a buried warning: a degenerate fallback prints CLUSTER SPLIT NOT
+        ACTIVE.
+        """
+        col = self.cluster_column
+        if col is None:
+            logger.info(f"Teddymer split: positional (cluster_column=None); "
+                     f"train={len(train_meta)} val={len(val_meta)}")
+            return
+        present = col in train_meta.columns and col in val_meta.columns
+        disjoint = False
+        n_clusters = 0
+        if present:
+            tc = set(train_meta[col].unique())
+            vc = set(val_meta[col].unique())
+            disjoint = tc.isdisjoint(vc)
+            n_clusters = len(tc | vc)
+        if present and disjoint:
+            logger.info(
+                f"Teddymer split: CLUSTER-AWARE on {col!r} ACTIVE — "
+                f"{n_clusters} disjoint clusters, train={len(train_meta)} "
+                f"val={len(val_meta)}"
+            )
+        else:
+            reason = "column absent from parquet" if not present else "clusters not disjoint"
+            logger.info(
+                f"Teddymer split: CLUSTER SPLIT NOT ACTIVE — cluster_column={col!r} "
+                f"requested but {reason}; fell back to POSITIONAL slice "
+                f"(homology leak risk). Rebuild the blob with `{col}` before trusting val."
+            )
+
     def setup(self, stage: str | None = None):
         if self.num_workers > 0:
             start_method = mp.get_start_method(allow_none=True)
@@ -349,6 +413,7 @@ class TeddymerDimerDataModule(L.LightningDataModule):
             cluster_column=self.cluster_column,
             cluster_seed=self.cluster_seed,
         )
+        self._log_split_provenance(train_meta, val_meta)
 
         atomarray_tfs = self._instantiate_transforms(self.atomarray_transforms)
         atom37_tfs = self._instantiate_transforms(self.atom37_transforms)
