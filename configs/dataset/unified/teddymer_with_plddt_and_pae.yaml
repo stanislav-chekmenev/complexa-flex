@@ -14,12 +14,27 @@ datamodule:
   dimers_parquet: ${oc.env:TEDDYMER_VIEW_ROOT,/netscratch/schekmenev/teddymer_v1_blob}/dimers.parquet
   locator_parquet: ${oc.env:TEDDYMER_VIEW_ROOT,/netscratch/schekmenev/teddymer_v1_blob}/locator_rows.parquet
   afdb_proteomes_root: ${oc.env:AFDB_PROTEOMES_ROOT,/netscratch/schekmenev/teddymer_v1_blob}
-  batch_size: 4
+  batch_size: 3
   num_workers: 8
   train_split: 0.99
   id_column: dimer_id
   pin_memory: true
   seed: 0
+
+  # Hold out whole 30%-sequence-identity clusters in val, not a positional
+  # row-order slice. dimers.parquet is parent-grouped, so the legacy
+  # positional split was clean by parent_afdb_id / uniprot_id but leaked at
+  # the fold / sequence-family level (~99.9% of val dimers share a CATH fold
+  # with train), inflating validation pLDDT/PAE Pearson on an untrained head.
+  # `seqclust30` is produced offline by scripts/cluster_teddymer_parents.py
+  # (MMseqs2 easy-cluster --min-seq-id 0.3 over parent monomer sequences,
+  # mapped onto every dimer by uniprot_id). In the spirit of AF-multimer /
+  # Boltz cluster-based splits (they cluster ingested chains at ~40%; we use a
+  # stricter 30% on the parent monomer) — not a verbatim port. If absent,
+  # _split_metadata warns and falls back to the positional slice — so point
+  # TEDDYMER_VIEW_ROOT at a blob carrying the column before relying on it.
+  cluster_column: seqclust30
+  cluster_seed: 0
 
   # The supervised pool is filtered by geometry only — not by predicted
   # confidence. The legacy Complexa-paper cut
