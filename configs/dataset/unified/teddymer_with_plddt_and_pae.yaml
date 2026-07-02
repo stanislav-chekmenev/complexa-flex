@@ -15,7 +15,7 @@ datamodule:
   locator_parquet: ${oc.env:TEDDYMER_VIEW_ROOT,/netscratch/schekmenev/teddymer_v1_blob}/locator_rows.parquet
   afdb_proteomes_root: ${oc.env:AFDB_PROTEOMES_ROOT,/netscratch/schekmenev/teddymer_v1_blob}
   batch_size: 3
-  num_workers: 8
+  num_workers: 16
   train_split: 0.99
   id_column: dimer_id
   pin_memory: true

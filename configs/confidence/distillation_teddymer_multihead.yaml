@@ -84,7 +84,7 @@ trainer:
   _target_: lightning.pytorch.Trainer
   accelerator: gpu
   devices: 1
-  num_nodes: 1
+  num_nodes: 2
   strategy:
     _target_: lightning.pytorch.strategies.DDPStrategy
     find_unused_parameters: true
@@ -113,8 +113,8 @@ trainer:
 
 data:
   datamodule:
-    cluster_column: null
-    cluster_seed: 42
+    cluster_column: seqclust30
+    cluster_seed: 0
 
 seed: 42
 run_name: "multi-plddt-pae-distill-teddymer"
@@ -123,5 +123,5 @@ resume_ckpt_path: null
 
 integrity:
   enabled: true
-  view_root: ${oc.env:TEDDYMER_VIEW_ROOT,/netscratch/schekmenev/teddymer_v1_blob}
-  snapshot_path: /mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5
+  view_root: ${oc.env:TEDDYMER_VIEW_ROOT,/netscratch/schekmenev/teddymer_v2_blob}
+  snapshot_path: /mnt/storage01/home/schekmenev/data/teddymer_v2/data.md5

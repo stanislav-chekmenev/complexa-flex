@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:h100nvl:2
 #SBATCH --ntasks-per-node=2
 #SBATCH --exclude=H100Azure04,H100Azure05
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
+#SBATCH --nodes=2
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=4-00:00:00
 #SBATCH --output=logs/multi_%j.out
@@ -24,7 +24,7 @@ echo "==========================================="
 # --- Project layout ---
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
 NUM_DEVICES="${NUM_DEVICES:-2}"
-NUM_NODES="${NUM_NODES:-1}"
+NUM_NODES="${NUM_NODES:-2}"
 MAX_STEPS="${MAX_STEPS:-}"
 DEVICE_TYPE=h100nvl
 
@@ -137,13 +137,14 @@ for ckpt_name in complexa.ckpt complexa_ae.ckpt; do
 done
 echo "Checkpoint staging complete."
 
-# Teddymer view: the dataset's Hydra defaults now point at the staged
-# /netscratch blob at `/netscratch/schekmenev/teddymer_v1_blob/` (single
-# `data.blob` + locator + dimers + `data.md5` sidecar). The train-start
-# integrity gate (`integrity.enabled=true` in
+# Teddymer view: this run trains on the leak-free v2 (`seqclust30`) blob.
+# Launch with TEDDYMER_VIEW_ROOT=/netscratch/schekmenev/teddymer_v2_blob so
+# the dataset + integrity view_root resolve to the staged /netscratch v2
+# blob (single `data.blob` + locator + dimers + `data.md5` sidecar). The
+# train-start integrity gate (`integrity.enabled=true` in
 # `distillation_teddymer_multihead.yaml`) verifies the live files against
-# the labs-adjacent snapshot at
-# `/mnt/storage01/home/schekmenev/data/teddymer_v1/data.md5` before any
+# the labs-adjacent v2 snapshot at
+# `/mnt/storage01/home/schekmenev/data/teddymer_v2/data.md5` before any
 # GPU work. To run against labs directly, override the env vars
 # `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` and set
 # `+integrity.enabled=false` on the command line.
