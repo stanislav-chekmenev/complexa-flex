@@ -137,17 +137,23 @@ for ckpt_name in complexa.ckpt complexa_ae.ckpt; do
 done
 echo "Checkpoint staging complete."
 
-# Teddymer view: this run trains on the leak-free v2 (`seqclust30`) blob.
-# Launch with TEDDYMER_VIEW_ROOT=/netscratch/schekmenev/teddymer_v2_blob so
-# the dataset + integrity view_root resolve to the staged /netscratch v2
-# blob (single `data.blob` + locator + dimers + `data.md5` sidecar). The
-# train-start integrity gate (`integrity.enabled=true` in
+# Teddymer view: this run trains on the leak-free v2 (`seqclust30`) blob,
+# which is now the default for this sbatch. The dataset + integrity
+# `view_root` resolve `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` via
+# oc.env; we export the v2 blob path here (with `:-` so a caller can still
+# override on the CLI, e.g. to point at labs) so a bare `sbatch
+# scripts/train_confidence_teddymer_multihead.sbatch` picks up v2 without
+# any --export plumbing. The h100 /netscratch store is shared across all
+# h100 nodes, so the staged blob is visible from every allocated rank.
+# The train-start integrity gate (`integrity.enabled=true` in
 # `distillation_teddymer_multihead.yaml`) verifies the live files against
 # the labs-adjacent v2 snapshot at
 # `/mnt/storage01/home/schekmenev/data/teddymer_v2/data.md5` before any
 # GPU work. To run against labs directly, override the env vars
 # `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` and set
 # `+integrity.enabled=false` on the command line.
+export TEDDYMER_VIEW_ROOT="${TEDDYMER_VIEW_ROOT:-/netscratch/schekmenev/teddymer_v2_blob}"
+export AFDB_PROTEOMES_ROOT="${AFDB_PROTEOMES_ROOT:-/netscratch/schekmenev/teddymer_v2_blob}"
 
 export DATA_PATH="$DATA_ROOT"
 export CKPT_DIR="$CKPT_DIR_DST"
