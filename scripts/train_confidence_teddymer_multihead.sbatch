@@ -1,13 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=complexa_multi
-#SBATCH --partition=h100
+#SBATCH --partition=gpu
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:h100nvl:2
-#SBATCH --ntasks-per-node=2
-#SBATCH --exclude=H100Azure04,H100Azure05
-#SBATCH --nodes=2
+#SBATCH --gres=gpu:rtx6000:8
+#SBATCH --ntasks-per-node=8
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --mem=512G
 #SBATCH --time=4-00:00:00
 #SBATCH --output=logs/multi_%j.out
 #SBATCH --error=logs/multi_%j.err
@@ -23,10 +22,10 @@ echo "==========================================="
 
 # --- Project layout ---
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
-NUM_DEVICES="${NUM_DEVICES:-2}"
-NUM_NODES="${NUM_NODES:-2}"
+NUM_DEVICES="${NUM_DEVICES:-8}"
+NUM_NODES="${NUM_NODES:-1}"
 MAX_STEPS="${MAX_STEPS:-}"
-DEVICE_TYPE=h100nvl
+DEVICE_TYPE=rtx6000
 
 # --- SLURM/Hydra coherence guard ---
 # `trainer.num_nodes` and `trainer.devices` are forwarded to Lightning's
@@ -75,9 +74,9 @@ mkdir -p "$PROJECT_ROOT/logs"
 ENV_TARBALL="${ENV_TARBALL:-/netscratch/schekmenev/venvs/complexa-flex/venv.tar.gz}"
 ENV_LOCAL="$DATA_ROOT/.venv"
 
-# The h100 partition has its own /netscratch storage (confusingly also
-# /netscratch/schekmenev) that does NOT share state with the gpu
-# partition. If $ENV_TARBALL is missing on the local /netscratch, copy
+# Each partition has its own /netscratch storage (confusingly all mounted
+# at /netscratch/schekmenev) that does NOT share state across partitions.
+# If $ENV_TARBALL is missing on the local /netscratch, copy
 # the labs-NFS canonical copy into place. Source must be reachable from
 # every partition (labs NFS is).
 ENV_TARBALL_SRC="${ENV_TARBALL_SRC:-$PROJECT_ROOT/venv.tar.gz}"
@@ -152,6 +151,8 @@ echo "Checkpoint staging complete."
 # GPU work. To run against labs directly, override the env vars
 # `TEDDYMER_VIEW_ROOT` / `AFDB_PROTEOMES_ROOT` and set
 # `+integrity.enabled=false` on the command line.
+# NB: this run is single-node on the gpu partition; the v2 blob was
+# relocated to the gpu-store /netscratch after the h100-store corruption.
 export TEDDYMER_VIEW_ROOT="${TEDDYMER_VIEW_ROOT:-/netscratch/schekmenev/teddymer_v2_blob}"
 export AFDB_PROTEOMES_ROOT="${AFDB_PROTEOMES_ROOT:-/netscratch/schekmenev/teddymer_v2_blob}"
 
@@ -184,9 +185,12 @@ echo ""
 unset WANDB_API_KEY
 
 # --- NCCL tuning ---
+# gpu partition has InfiniBand (unlike h100) — do NOT disable IB; NCCL uses
+# it for inter-node collectives (moot at 1 node but correct default). P2P is
+# enabled: single-node 8x rtx6000 want intra-node P2P (NVLink/PCIe) for the
+# DDP allreduce; disabling it here would force staged copies through host RAM.
 export NCCL_DEBUG=INFO
-export NCCL_IB_DISABLE=1
-export NCCL_P2P_DISABLE=1
+export NCCL_P2P_DISABLE=0
 export NCCL_SHM_DISABLE=0
 export NCCL_ASYNC_ERROR_HANDLING=1
 
