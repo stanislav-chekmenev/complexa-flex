@@ -2,11 +2,11 @@
 #SBATCH --job-name=complexa_multi
 #SBATCH --partition=gpu
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:rtx6000:8
-#SBATCH --ntasks-per-node=8
+#SBATCH --gres=gpu:rtx6000:4
+#SBATCH --ntasks-per-node=4
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=512G
+#SBATCH --mem=256G
 #SBATCH --time=4-00:00:00
 #SBATCH --output=logs/multi_%j.out
 #SBATCH --error=logs/multi_%j.err
@@ -22,7 +22,7 @@ echo "==========================================="
 
 # --- Project layout ---
 PROJECT_ROOT="/mnt/storage01/home/schekmenev/projects/complexa-flex"
-NUM_DEVICES="${NUM_DEVICES:-8}"
+NUM_DEVICES="${NUM_DEVICES:-4}"
 NUM_NODES="${NUM_NODES:-1}"
 MAX_STEPS="${MAX_STEPS:-}"
 DEVICE_TYPE=rtx6000
