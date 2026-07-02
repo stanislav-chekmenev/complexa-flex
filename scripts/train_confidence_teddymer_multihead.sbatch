@@ -5,6 +5,7 @@
 #SBATCH --gres=gpu:rtx6000:4
 #SBATCH --ntasks-per-node=4
 #SBATCH --nodes=1
+#SBATCH --nodelist=gpu03
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 #SBATCH --time=4-00:00:00
