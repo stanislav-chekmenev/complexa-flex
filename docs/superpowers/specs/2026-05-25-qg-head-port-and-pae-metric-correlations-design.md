@@ -6,6 +6,8 @@
 **Branch base.** `dev`
 **Approach.** A (Investigate → PR #1 head rewrite → PR #2 metrics)
 
+> **Status (2026-07-07, GC note):** MIXED — §6 PR #2 (pAE metric correlations) **shipped** as PR #24 and is live. §5 PR #1 (QG head rewrite) shipped as PR #23 then was **fully reverted** by PR #26 (`revert/multi-head-pre-qg`); `adaptor.py` / `qg_pairformer_stack.py` / `community_models/boltz/` no longer exist and `MultiHeadConfidence` is back on `ConfidenceTrunk`. Kept live (not archived) because it is half-reverted; treat §5 as historical. The separate QG/La-Proteina *frozen-feature probe* (2026-07-07) lives in the quality-graft repo — see handoff `docs/handoff/2026-07-07_qg_frozen_feature_probe.md`.
+
 ---
 
 ## 1. Motivation
