@@ -30,6 +30,7 @@ from proteinfoundation.rewards.base_reward import TOTAL_REWARD_KEY
 from proteinfoundation.utils.config_utils import filter_config_for_logging
 from proteinfoundation.utils.lora_utils import replace_lora_layers
 from proteinfoundation.utils.pdb_utils import write_prot_to_pdb
+from proteinfoundation.utils.predict_time_budget import PredictTimeBudget
 
 
 def setup(
@@ -304,7 +305,15 @@ def save_predictions(
     """
     pdb_paths = []
     rewards = []
+    confidence_rows: list[dict] = []
     samples_per_length = defaultdict(int)
+    _confidence_keys = [
+        "confidence_ipae",
+        "confidence_complex_plddt",
+        "provisional_success",
+        "ipae_reuse",
+        "elapsed_gpu_hours",
+    ]
     for batch_idx, batch_pred in enumerate(predictions):
         batch_size = batch_pred["coors"].shape[0]
         for i in range(batch_size):
@@ -367,9 +376,24 @@ def save_predictions(
                 row_data["total_reward"] = np.nan
             if sample_type is not None:
                 row_data["sample_type"] = sample_type
+            metadata_tag = None
             if "metadata_tag" in batch_pred and i < len(batch_pred["metadata_tag"]):
-                row_data["metadata_tag"] = batch_pred["metadata_tag"][i]
+                metadata_tag = batch_pred["metadata_tag"][i]
+                row_data["metadata_tag"] = metadata_tag
             rewards.append(row_data)
+
+            if rewards_dict is not None and any(k in rewards_dict for k in _confidence_keys):
+                conf_row = {"metadata_tag": metadata_tag}
+                for key in _confidence_keys:
+                    if key in rewards_dict:
+                        conf_row[key] = rewards_dict[key][i].float().detach().cpu().numpy()
+                confidence_rows.append(conf_row)
+
+    if confidence_rows:
+        sidecar_path = os.path.join(root_path, "..", f"confidence_scores_{job_id}.csv")
+        pd.DataFrame(confidence_rows).to_csv(sidecar_path, index=False)
+        logger.info(f"Confidence scores saved to: {sidecar_path}")
+
     return pdb_paths, pd.DataFrame(rewards)
 
 
@@ -648,12 +672,17 @@ def main(cfg):
         model.ligand = ligand  # shouldn't be set here, but pass in dataset
 
     # Sample model
+    time_budget_hours = cfg_gen.get("time_budget_hours", None)
+    max_predict_batches = cfg_gen.get("max_batches", None)
+    callbacks = [PredictTimeBudget(budget_hours=time_budget_hours)]
     trainer = L.Trainer(
         accelerator="gpu",
         devices=1,
         logger=False,
         enable_checkpointing=False,
         inference_mode=False,
+        callbacks=callbacks,
+        limit_predict_batches=max_predict_batches,
     )  # set it to False, as we need refinement in predict step
     predictions = trainer.predict(model, dataloader)
     # predictions is now a list of dicts (one per batch), each dict contains:
