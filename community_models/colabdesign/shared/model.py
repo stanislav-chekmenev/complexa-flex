@@ -157,7 +157,7 @@ class design_model:
 
     def update_grad(state, grad, params):
       updates, state = o.update(grad, state, params)
-      grad = jax.tree_map(lambda x:-x, updates)
+      grad = jax.tree_util.tree_map(lambda x:-x, updates)
       return state, grad
     
     self._optimizer = jax.jit(update_grad, device=self._device if hasattr(self, "_device") else None)
