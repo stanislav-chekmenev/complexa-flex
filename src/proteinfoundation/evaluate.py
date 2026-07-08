@@ -484,6 +484,20 @@ def _add_refolded_structure_metrics(
     return df
 
 
+def _attach_eval_finish_times(df: pd.DataFrame, elapsed_s: float) -> pd.DataFrame:
+    """Stamp each row with the binder-eval wall-clock offset in ``eval_finish_s`` (seconds).
+
+    The AF2 refold runs as a single batched call inside ``compute_binder_metrics``, so a true
+    per-sample finish time is not observable without instrumenting that path. We therefore use
+    the uniform model documented in the plot: every confirmed sample carries the total binder-eval
+    elapsed time, added to its generation ``elapsed_gpu_hours`` on the plot's x-axis. Legacy runs
+    without this column degrade gracefully to a generation-only axis.
+    """
+    df = df.copy()
+    df["eval_finish_s"] = float(elapsed_s)
+    return df
+
+
 def run_binder_evaluation(
     cfg: DictConfig,
     sample_paths: list[str],
@@ -508,6 +522,8 @@ def run_binder_evaluation(
     target_task_name, target_pdb_path, target_pdb_chain, is_target_ligand = get_target_info(cfg)
     logger.info(f"Running binder evaluation for target: {target_task_name}")
 
+    eval_start = time.monotonic()
+
     df = compute_binder_metrics(
         eval_config=cfg,
         sample_root_paths=sample_paths,
@@ -518,6 +534,8 @@ def run_binder_evaluation(
 
     df = _add_pre_refolding_metrics(cfg, df, sample_paths)
     df = _add_refolded_structure_metrics(cfg, df, job_id)
+
+    df = _attach_eval_finish_times(df, elapsed_s=time.monotonic() - eval_start)
 
     # Note: ESM metrics are computed inside compute_binder_metrics when
     # cfg.metric.compute_esm_metrics=True. They are computed per sequence type

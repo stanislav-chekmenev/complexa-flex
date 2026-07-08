@@ -27,27 +27,38 @@ class BestOfNSearch(BaseSearch):
     def __init__(self, proteina_instance, inf_cfg):
         super().__init__(proteina_instance, inf_cfg)
         self.single_pass = SinglePassGeneration(proteina_instance, inf_cfg)
+        # Per-instance counter incremented once per search() call. The best-of-N
+        # loop invokes search() on the SAME conditioning batch every iteration, so
+        # (sample_index, replica) alone is NOT a unique candidate key — it repeats
+        # each iteration and fans out downstream metadata_tag joins. Prefixing the
+        # tag with this counter makes it globally unique per candidate.
+        self._iteration = 0
 
     def search(self, batch: dict) -> dict:
         """Expand the batch by ``replicas``, chunk to ``max_batch_size``, run.
 
         Returns:
             Dict with 'lookahead' (None) and 'final' (all replicas).
-            Each sample's metadata_tag encodes its original sample index
-            and replica index: ``bon_orig{s}_r{r}``.
+            Each sample's metadata_tag encodes the search iteration, its
+            original sample index, and replica index: ``bon_it{i}_orig{s}_r{r}``.
         """
         replicas = self.inf_cfg.search.best_of_n.replicas
         max_batch_size = self.inf_cfg.search.get("max_batch_size", None)
         nsamples = batch["mask"].shape[0]
         total = nsamples * replicas
 
+        iteration = self._iteration
+        self._iteration += 1
+
         logger.debug(
-            f"[BestOfN] nsamples={nsamples}, replicas={replicas}, total={total}, max_batch_size={max_batch_size}"
+            f"[BestOfN] it={iteration}, nsamples={nsamples}, replicas={replicas}, total={total}, max_batch_size={max_batch_size}"
         )
 
         # Build tags up-front so they stay aligned through chunking.
         # repeat_interleave layout: replicas of same sample adjacent.
-        all_tags: list[str] = [f"bon_orig{s}_r{r}" for s in range(nsamples) for r in range(replicas)]
+        all_tags: list[str] = [
+            f"bon_it{iteration}_orig{s}_r{r}" for s in range(nsamples) for r in range(replicas)
+        ]
 
         expanded_batch = replicate_batch(batch, replicas)
         logger.info(f"[BestOfN] Expanded batch size: {expanded_batch['mask'].shape[0]}")

@@ -34,6 +34,58 @@ def _get_filter_cfg(cfg) -> Any:
     return gen.search
 
 
+def select_top_samples(
+    combined_rewards: pd.DataFrame,
+    total_samples: int,
+    reward_threshold: float | None = None,
+) -> pd.DataFrame:
+    """Rank and cap samples for the final filter.
+
+    When a ``provisional_success`` column is present (confidence-head
+    best-of-N pipeline: the head has already scored every sample), the kept
+    set is FIRST restricted to successes (``provisional_success > 0.5``); the
+    reward threshold and ``total_samples`` cap then act as secondary limits
+    AMONG successes only, ranked by ``total_reward`` descending. This makes the
+    downstream move-to-``filtered_out_samples/`` step relocate every
+    non-success directory so the evaluate stage refolds successes only.
+
+    When the column is ABSENT (legacy AF2-reward pipeline), behaviour is
+    byte-identical to the historical top-N-by-reward selection: the reward
+    threshold and cap are applied ONLY when there are more rows than
+    ``total_samples`` (matching the pre-fix ``if len > total_samples`` guard).
+
+    Args:
+        combined_rewards: Reward rows; must have ``total_reward``.
+        total_samples: Maximum rows to keep after ranking.
+        reward_threshold: Optional minimum ``total_reward`` (inclusive).
+
+    Returns:
+        The selected rows, sorted by ``total_reward`` descending.
+    """
+    top_samples = combined_rewards.sort_values("total_reward", ascending=False)
+
+    if "provisional_success" not in top_samples.columns:
+        # Legacy AF2-reward path: preserve the historical guard exactly.
+        if len(top_samples) > total_samples:
+            if reward_threshold is not None:
+                top_samples = top_samples[
+                    top_samples["total_reward"] >= reward_threshold
+                ]
+            top_samples = top_samples.head(total_samples)
+        return top_samples
+
+    n_before = len(top_samples)
+    top_samples = top_samples[top_samples["provisional_success"] > 0.5]
+    logger.info(
+        f"Provisional-success gate: {n_before} -> {len(top_samples)} samples"
+    )
+
+    if reward_threshold is not None:
+        top_samples = top_samples[top_samples["total_reward"] >= reward_threshold]
+
+    return top_samples.head(total_samples)
+
+
 def setup(
     cfg: dict,
     create_root: bool = True,
@@ -167,20 +219,13 @@ def main(cfg):
     logger.info(f"  Reward threshold:  {reward_threshold}")
     logger.info(f"  Delete unselected: {delete_files}")
 
-    # Initialize top_samples (will be filtered if needed)
-    top_samples = combined_rewards.sort_values("total_reward", ascending=False)
+    # Rank + gate. When a provisional_success column is present (confidence-head
+    # pipeline), select_top_samples restricts to head-successes BEFORE the top-N
+    # cap; otherwise it is the legacy top-N-by-reward selection.
+    top_samples = select_top_samples(combined_rewards, total_samples, reward_threshold)
 
-    if len(combined_rewards) > total_samples:
-        logger.info(f"Filtering {len(combined_rewards)} samples down to {total_samples}...")
-
-        # Apply reward threshold if set
-        if reward_threshold is not None:
-            top_samples = top_samples[top_samples["total_reward"] >= reward_threshold]
-            logger.info(f"After reward threshold: {len(top_samples)} samples")
-
-        # Limit to top N samples
-        top_samples = top_samples.head(total_samples)
-        logger.info(f"Selected {len(top_samples)} samples after filtering")
+    if len(top_samples) < len(combined_rewards):
+        logger.info(f"Filtering {len(combined_rewards)} samples down to {len(top_samples)}...")
 
         if len(top_samples) == 0:
             logger.warning("No samples passed filtering — skipping directory deletion to avoid removing all data")
@@ -226,7 +271,7 @@ def main(cfg):
                             logger.error(f"Error moving {item_path} to {dest_path}: {e!s}")
                 logger.info(f"Moved {moved_count} directories to {filtered_root}")
     else:
-        logger.info(f"No filtering needed: {len(combined_rewards)} samples <= {total_samples} limit")
+        logger.info(f"No filtering needed: all {len(combined_rewards)} samples kept")
 
     # Save all rewards
     combined_rewards.to_csv(os.path.join(root_path, f"all_rewards_{config_name}.csv"), index=False)

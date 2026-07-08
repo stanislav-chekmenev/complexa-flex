@@ -36,6 +36,7 @@ else:
 
 from proteinfoundation.nn.protein_transformer import ProteinTransformerAF3
 from proteinfoundation.partial_autoencoder.autoencoder import AutoEncoder
+from proteinfoundation.rewards.base_reward import TOTAL_REWARD_KEY
 from proteinfoundation.rewards.reward_utils import compute_reward_from_samples, initialize_reward_model
 from proteinfoundation.search.search_factory import instantiate_refinement, instantiate_search
 from proteinfoundation.search.search_utils import (
@@ -684,6 +685,63 @@ class Proteina(L.LightningModule):
             )
 
     # ------------------------------------------------------------------
+    # Confidence-head scorer (best-of-N without AF2 in the loop)
+    # ------------------------------------------------------------------
+
+    def _confidence_scorer_cfg(self):
+        """Return the ``confidence_scorer`` block if enabled, else ``None``.
+
+        The generation-stage config is what ``configure_inference`` receives,
+        so ``confidence_scorer`` sits directly under ``self.inf_cfg``.
+        """
+        cfg = getattr(self.inf_cfg, "confidence_scorer", None)
+        if cfg is None or not cfg.get("enabled", False):
+            return None
+        return cfg
+
+    def _get_confidence_scorer(self):
+        """Lazily build and cache the confidence-head scorer, reusing this trunk."""
+        if getattr(self, "_confidence_scorer", None) is not None:
+            return self._confidence_scorer
+        cfg = self._confidence_scorer_cfg()
+        # Imported here so the confidence subsystem is only loaded when used.
+        from proteinfoundation.confidence.inference_scorer import ConfidenceHeadScorer
+
+        self._confidence_scorer = ConfidenceHeadScorer(
+            ckpt_path=cfg.ckpt_path,
+            proteina=self,
+            trunk_eval_t=cfg.get("trunk_eval_t", 0.99),
+            device=self.device,
+        )
+        return self._confidence_scorer
+
+    def _score_finals_with_confidence(self, final_prots: dict) -> dict:
+        """Score final complexes with the confidence head.
+
+        Returns a dict shaped like ``compute_reward_from_samples``'s output
+        (``TOTAL_REWARD_KEY`` + component tensors) so ``save_predictions``
+        writes them as CSV columns unchanged.  ``total_reward = -ipae`` keeps
+        ``filter.py``'s ``dropna``/dedup/top-N working; NaN ipae (no interface)
+        sinks to a very low reward rather than being dropped.
+        """
+        scorer = self._get_confidence_scorer()
+        scores = scorer.score_native(final_prots)
+
+        device = final_prots["coors"].device
+        ipae = scores["ipae"].to(device=device, dtype=torch.float32)
+        total_reward = torch.where(
+            torch.isnan(ipae),
+            torch.full_like(ipae, -1e9),
+            -ipae,
+        )
+        return {
+            TOTAL_REWARD_KEY: total_reward,
+            "confidence_ipae": ipae,
+            "confidence_complex_plddt": scores["complex_plddt"].to(device=device, dtype=torch.float32),
+            "provisional_success": scores["provisional_success"].to(device=device, dtype=torch.float32),
+        }
+
+    # ------------------------------------------------------------------
     # predict_step
     # ------------------------------------------------------------------
 
@@ -701,8 +759,14 @@ class Proteina(L.LightningModule):
         if "mask" not in batch:
             raise ValueError("Batch must contain 'mask' tensor")
 
-        if not hasattr(self, "reward_model") or self.reward_model is None:
-            self.reward_model = initialize_reward_model(self.inf_cfg)
+        use_confidence_scorer = self._confidence_scorer_cfg() is not None
+
+        # When the confidence scorer is configured we deliberately do NOT
+        # initialize (or call) the AF2 reward model: AF2 must not run inside the
+        # best-of-N search loop.  It stays the FINAL filter in the evaluate stage.
+        if not use_confidence_scorer:
+            if not hasattr(self, "reward_model") or self.reward_model is None:
+                self.reward_model = initialize_reward_model(self.inf_cfg)
 
         # ---- Search ----
         search_result = self._get_search_instance().search(batch)
@@ -735,7 +799,9 @@ class Proteina(L.LightningModule):
         )
 
         final_rewards = None
-        if self.reward_model is not None:
+        if use_confidence_scorer:
+            final_rewards = self._score_finals_with_confidence(final_prots)
+        elif self.reward_model is not None:
             final_rewards = compute_reward_from_samples(
                 self.reward_model,
                 final_prots,

@@ -6,6 +6,8 @@
 **Branch base.** `dev`
 **Approach.** A (Investigate → PR #1 head rewrite → PR #2 metrics)
 
+> **Status (2026-07-07, GC note):** MIXED — §6 PR #2 (pAE metric correlations) **shipped** as complexa-flex PR #24 and is live. §5 PR #1 (QG head rewrite) shipped as complexa-flex PR #23 then was **fully reverted** by complexa-flex PR #26 (`revert/multi-head-pre-qg`); `adaptor.py` / `qg_pairformer_stack.py` / `community_models/boltz/` no longer exist and `MultiHeadConfidence` is back on `ConfidenceTrunk`. Kept live (not archived) because it is half-reverted; treat §5 as historical. **PR-number collision warning:** the #23/#24 above are complexa-flex PRs; the separate QG/La-Proteina *frozen-feature probe* landed 2026-07-07 in the **quality-graft** repo under its OWN PRs #23 (local_only wiring) + #24 (probe lib) — unrelated numbers in a different repo. Frozen-probe brief archived at `docs/archive/handoff/2026-07-07_qg_frozen_feature_probe.md`.
+
 ---
 
 ## 1. Motivation
