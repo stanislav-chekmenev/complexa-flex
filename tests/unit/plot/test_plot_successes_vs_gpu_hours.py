@@ -127,7 +127,10 @@ def test_curve_monotone_and_endpoint(synthetic_csvs):
     )
     plot_mod.run(args)
 
-    series = pd.read_csv(out_png.with_suffix(".series.csv"))
+    series_all = pd.read_csv(out_png.with_suffix(".series.csv"))
+    # Two gates are emitted: the headline AlphaProteo gate and the head+scRMSD gate.
+    assert set(series_all["gate"]) == {"head_plus_scrmsd", "alphaproteo"}
+    series = series_all[series_all["gate"] == "alphaproteo"]
     ys = series["cumulative_unique_successes"].to_numpy()
     xs = series["elapsed_gpu_hours"].to_numpy()
 
@@ -140,6 +143,14 @@ def test_curve_monotone_and_endpoint(synthetic_csvs):
     # three AF2-confirmed provisional successes contribute three curve points.
     assert len(ys) == 3
     assert out_png.exists()
+
+    # head+scRMSD gate = provisional_success AND AF2 scRMSD<1.5. r0,r1,r2 (clusters
+    # A,B) plus r3 (prov=True, AF2 ipAE fails but scRMSD=1.0<1.5, its own cluster)
+    # -> {A, B, r3} = 3 unique; r4 (prov=False) is dropped before AF2.
+    hs = series_all[series_all["gate"] == "head_plus_scrmsd"]
+    hs_ys = hs["cumulative_unique_successes"].to_numpy()
+    assert np.all(np.diff(hs_ys) >= 0)
+    assert hs_ys[-1] == 3
 
 
 def test_af2_failing_provisional_excluded(synthetic_csvs):

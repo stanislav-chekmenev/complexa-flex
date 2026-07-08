@@ -7,8 +7,11 @@ decide which candidates to keep.
 
 Best-of-N does not steer, so this is a *scorer*, not a reward: it emits a
 per-sample interface ipAE and complex pLDDT, and a boolean provisional
-success ``(ipae < 7 A) & (complex_plddt > 0.9)`` (2-of-3 AlphaProteo proxy;
-the head cannot produce scRMSD).
+success ``(ipae < 7 A) & (complex_plddt > 0.92)`` (2-of-3 AlphaProteo proxy;
+the head cannot produce scRMSD). The pLDDT floor is 0.92, not the AlphaProteo
+0.90, because the head is overconfident vs AF2-multimer (its complex pLDDT
+reads high); the tightened gate trims that head-vs-AF2 bias before the
+expensive AF2 refold in evaluate.
 
 Frame invariant (load-bearing): the head was distilled on co-diffused native
 dimers -- both chains as ordinary diffused residues in a single unextended
@@ -40,9 +43,10 @@ from proteinfoundation.utils.sample_utils import add_clean_samples
 # value is already in A; there is no x31 rescale -- that factor only applies to
 # AF2's normalised i_pAE column, see result_analysis/binder_analysis_utils.py).
 # pLDDT is compared on the 0-1 scale, so the head's 0-100 expected value is
-# divided by 100 before the test.
+# divided by 100 before the test. The floor is 0.92 (tighter than the
+# AlphaProteo 0.90) because the head is overconfident vs AF2-multimer.
 SUCCESS_IPAE_ANGSTROM = 7.0
-SUCCESS_PLDDT_01 = 0.9
+SUCCESS_PLDDT_01 = 0.92
 PLDDT_EV_SCALE = 100.0
 
 

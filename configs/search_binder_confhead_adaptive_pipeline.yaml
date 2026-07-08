@@ -1,0 +1,71 @@
+# Adaptive best-of-N confidence-head search — per-round pipeline config.
+#
+# Identical to search_binder_confhead_local_pipeline.yaml (confidence-head
+# scoring in the generation loop, AF2 as the evaluate-stage final filter) except:
+#   1. the analyze success gate uses the FULL canonical AlphaProteo criteria
+#      (published 0.90 pLDDT floor), matching the adaptive loop's success
+#      accounting and the binder-design literature, not the scRMSD-only collapse.
+#      The head's tightened 0.92 pLDDT floor is a separate PROVISIONAL gate
+#      (inference_scorer.SUCCESS_PLDDT_01) that only decides which candidates get
+#      refolded; it is NOT the AF2 success gate; and
+#   2. per-round nsamples / seed / run_name are supplied by the outer driver
+#      (proteinfoundation.search.adaptive_bon_loop) via ++ overrides, so this
+#      file leaves generation.dataloader.dataset.nres.nsamples at its default and
+#      does NOT cap the per-round search on wall-clock (the OUTER loop owns the
+#      16h budget across all rounds; each round runs to completion).
+#
+# The outer driver runs this config once per round, in a round-indexed cwd, via:
+#   python -m proteinfoundation.cli.cli_runner design \
+#     configs/search_binder_confhead_adaptive_pipeline.yaml \
+#     ++generation.task_name=<T> \
+#     ++generation.dataloader.dataset.nres.nsamples=<N> \
+#     ++seed=<S> ++run_name=<R>
+
+defaults:
+  - search_binder_confhead_local_pipeline
+  - _self_
+
+run_name: search_binder_confhead_adaptive
+
+# =============================================================================
+# ABSOLUTE checkpoint paths. The adaptive driver runs each round's design
+# subprocess with cwd=<round_dir> (to isolate per-round Hydra/Lightning global
+# state and ./inference + ./evaluation_results outputs), so the parent config's
+# cwd-relative `ckpt_path: ./ckpts` would resolve to <round_dir>/ckpts and fail.
+# Point at the sbatch-staged absolute dir (${oc.env:CKPT_PATH}) instead. The
+# sbatch stages complexa.ckpt + complexa_ae.ckpt into $CKPT_PATH and exports it.
+# =============================================================================
+ckpt_path: ${oc.env:CKPT_PATH}
+autoencoder_ckpt_path: ${oc.env:CKPT_PATH}/complexa_ae.ckpt
+
+# =============================================================================
+# Generation-stage override: the OUTER loop owns the wall-clock budget, so each
+# round runs its full nsamples without a per-round time cutoff. The driver sets
+# nsamples per round (3000 for round 1, 1000 thereafter).
+# =============================================================================
+generation:
+  time_budget_hours: null
+
+# =============================================================================
+# Analyze-stage override: full canonical AlphaProteo gate (published 0.90 pLDDT
+# floor). Overrides the parent config's scRMSD-only collapse so the per-round
+# analyze CSV's success column matches the loop's success accounting exactly and
+# stays comparable to the binder-design literature (Bennett et al.).
+# =============================================================================
+aggregation:
+  success_thresholds:
+    i_pAE:
+      threshold: 7.0
+      op: "<="
+      scale: 31.0
+      column_prefix: complex
+    pLDDT:
+      threshold: 0.90
+      op: ">="
+      scale: 1.0
+      column_prefix: complex
+    scRMSD_ca:
+      threshold: 1.5
+      op: "<"
+      scale: 1.0
+      column_prefix: binder
