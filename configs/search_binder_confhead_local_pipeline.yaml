@@ -1,0 +1,110 @@
+# Binder Design Pipeline — confidence-head best-of-N search
+#
+# Same three-stage pipeline as search_binder_local_pipeline.yaml, but the
+# generation stage scores best-of-N candidates with the trained confidence head
+# (frozen trunk + multi-head pLDDT/PAE) instead of running AF2 in the search
+# loop.  AF2 in the evaluate stage remains the FINAL filter (folding_method
+# colabdesign, unchanged).
+#
+# Usage:
+#   CONF_CKPT_PATH=/path/to/confidence.ckpt \
+#   complexa design configs/search_binder_confhead_local_pipeline.yaml \
+#     ++run_name=confhead_bon ++generation.task_name=33_TrkA
+
+defaults:
+  - pipeline/binder/binder_generate@generation
+  - pipeline/binder/binder_evaluate@_global_
+  - pipeline/binder/binder_analyze@_global_
+  - _self_
+
+# =============================================================================
+# Run identification
+# =============================================================================
+run_name: search_binder_confhead_local
+ckpt_path: ./ckpts
+ckpt_name: complexa.ckpt
+autoencoder_ckpt_path: ./ckpts/complexa_ae.ckpt
+
+# =============================================================================
+# Job management — set gen_njobs/eval_njobs to your number of available GPUs
+# =============================================================================
+ncpus_: 24
+seed: 5
+gen_njobs: 1    # Number of parallel generation jobs (1 GPU each)
+eval_njobs: 1   # Number of parallel evaluation jobs (1 GPU each)
+
+# =============================================================================
+# Generation-stage overrides: confidence-head scoring, no AF2 in the loop
+# =============================================================================
+generation:
+  # Best-of-N returns all candidates (no steering); the confidence head only
+  # labels/ranks them.  AF2 is off during search and stays the final filter.
+  reward_model: null
+  search:
+    algorithm: best-of-n
+
+  confidence_scorer:
+    enabled: true
+    ckpt_path: ${oc.env:CONF_CKPT_PATH}
+    trunk_eval_t: 0.99
+
+  # Wall-clock cutoff for trainer.predict (hours). 0 or null disables it.
+  time_budget_hours: 16
+
+  # Cap on predict batches (null = unbounded). Leave null so time_budget_hours
+  # is the binding limit; inflate nres.nsamples below so the budget can fill.
+  max_batches: null
+
+  dataloader:
+    dataset:
+      nres:
+        nsamples: 1000   # many best-of-N batches so 16h is the binding limit
+
+# =============================================================================
+# Evaluate-stage override: AF2 complex scRMSD only
+# =============================================================================
+# The confidence head already produces every interface/fold metric the monomer
+# and ESM evaluations would recompute. The ONLY quantity the head cannot supply
+# is complex self-consistency scRMSD from the AF2-multimer refold (the analyze
+# success gate below). The default binder_evaluate ALSO runs ESMFold monomer
+# designability + codesignability + ESM metrics on EVERY sample (monomer_eval.py)
+# -- redundant here, and expensive enough that on the first 16h run it consumed
+# the entire budget before the AF2 complex refold began (only esmfold appeared
+# in evaluate.log; colabdesign never ran). Disable the monomer/ESM path so the
+# budget goes to the one third-party call we need.
+metric:
+  compute_monomer_metrics: false
+  compute_esm_metrics: false
+  compute_designability: false
+  compute_codesignability: false
+  compute_ss: false
+  # Binder complex refold (AF2-multimer via colabdesign) stays on -> scRMSD.
+  compute_binder_metrics: true
+  binder_folding_method: colabdesign
+  sequence_types: [self]
+
+# =============================================================================
+# Analyze-stage override: scRMSD-only success gate
+# =============================================================================
+# The confidence head already enforces the AF2 interface half of the success
+# criterion during search: only samples with provisional_success == (mean
+# interface ipAE < 7 A) AND (complex pLDDT > 0.9) reach evaluate (see
+# filter.select_top_samples). So the analyze success gate collapses to the one
+# criterion the head cannot produce -- self-consistency scRMSD from the AF2
+# refold. Pares DEFAULT_PROTEIN_BINDER_THRESHOLDS (binder_analysis_utils.py)
+# down to binder_scRMSD_ca < 1.5; i_pAE / pLDDT are still EXTRACTED as columns
+# (colabdesign_utils.py), just not gated on here.
+aggregation:
+  success_thresholds:
+    scRMSD_ca:
+      threshold: 1.5
+      op: "<"
+      scale: 1.0
+      column_prefix: binder
+
+# =============================================================================
+# Hydra
+# =============================================================================
+hydra:
+  run:
+    dir: ./logs/hydra_outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
