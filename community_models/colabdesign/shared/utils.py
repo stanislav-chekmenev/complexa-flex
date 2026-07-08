@@ -1,12 +1,13 @@
 import random
 import jax
+import jax.extend
 import numpy as np
 import jax.numpy as jnp
 import sys, gc
 
 def clear_mem():
   # clear vram (GPU)
-  backend = jax.lib.xla_bridge.get_backend()
+  backend = jax.extend.backend.get_backend()
   if hasattr(backend,'live_buffers'):
     for buf in backend.live_buffers():
       buf.delete()
@@ -27,7 +28,7 @@ def update_dict(D, *args, **kwargs):
           elif isinstance(d[k],(np.ndarray,jnp.ndarray)):
             d[k] = np.asarray(v)
           elif isinstance(d[k], dict):
-            d[k] = jax.tree_map(lambda x: type(x)(v), d[k])
+            d[k] = jax.tree_util.tree_map(lambda x: type(x)(v), d[k])
           else:
             d[k] = type(d[k])(v)
         else:
@@ -41,7 +42,7 @@ def update_dict(D, *args, **kwargs):
 
 def copy_dict(x):
   '''deepcopy dictionary'''
-  return jax.tree_map(lambda y:y, x)
+  return jax.tree_util.tree_map(lambda y:y, x)
 
 def to_float(x):
   '''convert to float'''

@@ -209,10 +209,15 @@ cd "$PROJECT_ROOT"
 # cropped; dynamic-L recompile storm risk — see plan §11 abort criterion).
 echo "Starting pLDDT + PAE confidence-head distillation..."
 RESUME_CKPT_PATH="${RESUME_CKPT_PATH:-}"
+RESUME_ID="${RESUME_ID:-}"
 EXTRA_OVERRIDES=()
 if [ -n "$RESUME_CKPT_PATH" ]; then
     echo "Resuming from ckpt: $RESUME_CKPT_PATH"
     EXTRA_OVERRIDES+=("resume_ckpt_path=$RESUME_CKPT_PATH")
+fi
+if [ -n "$RESUME_ID" ]; then
+    echo "Re-attaching WandB run id: $RESUME_ID"
+    EXTRA_OVERRIDES+=("resume_id=$RESUME_ID")
 fi
 if [ -n "$MAX_STEPS" ]; then
     EXTRA_OVERRIDES+=("trainer.max_steps=$MAX_STEPS")
