@@ -114,6 +114,7 @@ tests/test_eval_generated/
 .pytest_tmp/
 .claude/*
 !.claude/agents/
+!.claude/settings.json
 .dotnet/
 .gitconfig
 .gnupg/

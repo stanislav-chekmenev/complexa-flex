@@ -19,6 +19,7 @@ Path-specific deep invariants live in `docs/claude/*.md`. **Read the file for th
 - **Test-time search** — confidence-head provisional gate (pLDDT > 0.92) vs the immutable AF2 reporting gate (pLDDT ≥ 0.90), parity range-restriction corollary, confhead-evaluate = scRMSD-only, interface-ipAE OOD / native-frame → [docs/claude/search.md](docs/claude/search.md).
 - **Community-standard metric / reward parity** — verbatim-port rule, fp64 reference test, canonical in-tree references (force-T3 trigger) → [docs/claude/parity.md](docs/claude/parity.md).
 - **Dataset / supervised pool** — Teddymer geometry-only filter, confidence-based pre-filter antipattern → [docs/claude/data.md](docs/claude/data.md).
+- **Agent model routing** — lane membership, gateway precondition, override precedence, and runtime re-verification → [docs/claude/agents.md](docs/claude/agents.md).
 
 Adding or changing a load-bearing *path-specific* invariant: put the detail in the matching `docs/claude/*.md` and keep only a one-line pointer here.
 
@@ -47,22 +48,22 @@ Three project-scoped slash commands govern the start and end of a Claude session
 
 ## Subagent roster
 
-Subagent definitions are tracked under [.claude/agents/](.claude/agents/). Each agent has a defined scope; route work to the agent whose description matches the task:
+Every session starts as `orchestrator` on `claude-opus-5-5`, configured in [.claude/settings.json](.claude/settings.json). Its model-routing prompt and the three project agents that shadow `Explore`, `Plan`, and `general-purpose` are tracked under [.claude/agents/](.claude/agents/). Route work to the agent whose description matches the task; the Model column is the default lane:
 
-| Agent | Scope |
-| --- | --- |
-| [software-planning-architect](.claude/agents/software-planning-architect.md) | Translate ambiguous asks into structured implementation plans. Upstream of implementation. |
-| [ml-protein-architect](.claude/agents/ml-protein-architect.md) | Project-level architecture and *writes/edits code* once a plan is agreed. |
-| [ml-software-pytorch-jax-expert](.claude/agents/ml-software-pytorch-jax-expert.md) | PyTorch and JAX framework internals (autograd, compile, FSDP/SPMD, profiling, kernels). |
-| [code-review-debug-complexity-expert](.claude/agents/code-review-debug-complexity-expert.md) | Code review, systematic debugging, algorithmic / complexity optimisation. |
-| [generative-protein-scientist](.claude/agents/generative-protein-scientist.md) | Applied generative modelling for protein structure/sequence (FM, diffusion, guidance, search). |
-| [generative-flow-stochastic-math-expert](.claude/agents/generative-flow-stochastic-math-expert.md) | Math of diffusion / flow matching / OT / guidance / SMC. |
-| [structural-biology-binder-expert](.claude/agents/structural-biology-binder-expert.md) | Folded protein–protein binder biophysics and field practice. |
-| [structural-biology-idp-smallmol-expert](.claude/agents/structural-biology-idp-smallmol-expert.md) | IDP/IDR, motif-driven, and small-molecule binder design. |
-| [physics-statmech-md-dft-expert](.claude/agents/physics-statmech-md-dft-expert.md) | Stat mech, MD, free-energy methods, DFT, MLIP literature. |
-| [xray-crystallography-binder-ml](.claude/agents/xray-crystallography-binder-ml.md) | X-ray crystallography + ML, oriented to binder validation. |
+| Agent | Model | Scope |
+| --- | --- | --- |
+| [software-planning-architect](.claude/agents/software-planning-architect.md) | `z-ai/glm-5.3-flash` | Translate ambiguous asks into structured implementation plans. Upstream of implementation. |
+| [ml-protein-architect](.claude/agents/ml-protein-architect.md) | `gpt-6-luna` | Project-level architecture and *writes/edits code* once a plan is agreed. |
+| [ml-software-pytorch-jax-expert](.claude/agents/ml-software-pytorch-jax-expert.md) | `gpt-6-luna` | PyTorch and JAX framework internals (autograd, compile, FSDP/SPMD, profiling, kernels). |
+| [code-review-debug-complexity-expert](.claude/agents/code-review-debug-complexity-expert.md) | `z-ai/glm-5.3-flash` | Code review, systematic debugging, algorithmic / complexity optimisation. |
+| [generative-protein-scientist](.claude/agents/generative-protein-scientist.md) | `z-ai/glm-5.3-flash` | Applied generative modelling for protein structure/sequence (FM, diffusion, guidance, search). |
+| [generative-flow-stochastic-math-expert](.claude/agents/generative-flow-stochastic-math-expert.md) | `z-ai/glm-5.3-flash` | Math of diffusion / flow matching / OT / guidance / SMC. |
+| [structural-biology-binder-expert](.claude/agents/structural-biology-binder-expert.md) | `z-ai/glm-5.3-flash` | Folded protein–protein binder biophysics and field practice. |
+| [structural-biology-idp-smallmol-expert](.claude/agents/structural-biology-idp-smallmol-expert.md) | `z-ai/glm-5.3-flash` | IDP/IDR, motif-driven, and small-molecule binder design. |
+| [physics-statmech-md-dft-expert](.claude/agents/physics-statmech-md-dft-expert.md) | `z-ai/glm-5.3-flash` | Stat mech, MD, free-energy methods, DFT, MLIP literature. |
+| [xray-crystallography-binder-ml](.claude/agents/xray-crystallography-binder-ml.md) | `z-ai/glm-5.3-flash` | X-ray crystallography + ML, oriented to binder validation. |
 
-When delegating, pick the agent whose `description:` line matches the task. If multiple apply, dispatch them in parallel where they are working on independent angles.
+`Explore`, `Plan`, and `general-purpose` are also shadowed project agents on the judgement lane. See [docs/claude/agents.md](docs/claude/agents.md) for routing precedence and verification. When delegating, pick the agent whose `description:` line matches the task. If multiple apply, dispatch them in parallel where they are working on independent angles.
 
 ## Development workflow
 
