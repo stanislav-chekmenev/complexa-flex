@@ -16,7 +16,7 @@ LOCAL_SETTINGS = REPO_ROOT / ".claude" / "settings.local.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 ROUTING_DOC = REPO_ROOT / "docs" / "claude" / "agents.md"
 
-MAIN_MODEL = "claude-opus-5-5"
+MAIN_MODEL = "gpt-6-sol"
 MAIN_AGENT = "orchestrator"
 JUDGEMENT_MODEL = "z-ai/glm-5.3-flash"
 IMPLEMENTATION_MODEL = "gpt-6-luna"

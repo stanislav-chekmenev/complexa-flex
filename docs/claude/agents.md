@@ -13,7 +13,7 @@ suffix, because the client appends `/v1/messages` itself.
 
 | Lane | Model | Who |
 | --- | --- | --- |
-| Main session | `claude-opus-5-5` | `orchestrator` (`model` in `.claude/settings.json`; its agent definition inherits) |
+| Main session | `gpt-6-sol` | `orchestrator` (`model` in `.claude/settings.json`; its agent definition inherits) |
 | Review, advice, planning, search | `z-ai/glm-5.3-flash` | `code-review-debug-complexity-expert`, `software-planning-architect`, `generative-protein-scientist`, `generative-flow-stochastic-math-expert`, `structural-biology-binder-expert`, `structural-biology-idp-smallmol-expert`, `physics-statmech-md-dft-expert`, `xray-crystallography-binder-ml`, `Explore`, `Plan`, `general-purpose` |
 | Implementation | `gpt-6-luna` | `ml-protein-architect`, `ml-software-pytorch-jax-expert` |
 

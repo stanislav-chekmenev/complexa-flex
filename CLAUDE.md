@@ -48,7 +48,7 @@ Three project-scoped slash commands govern the start and end of a Claude session
 
 ## Subagent roster
 
-Every session starts as `orchestrator` on `claude-opus-5-5`, configured in [.claude/settings.json](.claude/settings.json). Its model-routing prompt and the three project agents that shadow `Explore`, `Plan`, and `general-purpose` are tracked under [.claude/agents/](.claude/agents/). Route work to the agent whose description matches the task; the Model column is the default lane:
+Every session starts as `orchestrator` on `gpt-6-sol`, configured in [.claude/settings.json](.claude/settings.json). Its model-routing prompt and the three project agents that shadow `Explore`, `Plan`, and `general-purpose` are tracked under [.claude/agents/](.claude/agents/). Route work to the agent whose description matches the task; the Model column is the default lane:
 
 | Agent | Model | Scope |
 | --- | --- | --- |
